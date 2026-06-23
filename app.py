@@ -3,7 +3,7 @@ import pandas as pd
 import requests, folium
 from streamlit.components.v1 import html
 
-# Fungsi link
+# --- FUNGSI PEMBANTU ---
 def get_gmaps_link(lat1, lon1, lat2, lon2):
     return f"https://www.google.com/maps/dir/?api=1&origin={lat1},{lon1}&destination={lat2},{lon2}&travelmode=driving"
 
@@ -21,6 +21,7 @@ def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
     except:
         return [[start_lat, start_lon], [end_lat, end_lon]]
 
+# --- UI APP ---
 st.set_page_config(layout="wide")
 st.title("📍 Wismilak Route Optimizer (Developed by Ghalib Damarillah Asahlintang)")
 st.caption("Pastikan rute koordinat benar benar sesuai agar tidak terjadi kesalahan penghitungan rute")
@@ -28,73 +29,83 @@ st.caption("Pastikan rute koordinat benar benar sesuai agar tidak terjadi kesala
 uploaded_file = st.file_uploader("Upload File Excel Toko (.xlsx)", type=["xlsx"])
 
 if uploaded_file:
-    with st.spinner('AI sedang menganalisis rute paling efisien dan realistis...'):
+    # 1. BACA FILE & AUTO DETECT KOLOM
+    with st.spinner('Membaca file Excel...'):
         df = pd.read_excel(uploaded_file)
-        locations = df[['Latitude', 'Longitude']].values.tolist()
-        names = df['Outlet Name'].tolist()
+        cols = df.columns.tolist()
 
-        # Hitung Matriks Durasi (Real-time)
-        coords = ";".join([f"{lon},{lat}" for lat, lon in locations])
+        def find_best_col(keywords):
+            for col in cols:
+                for kw in keywords:
+                    if kw in str(col).lower():
+                        return col
+            return cols[0]
+
+        st.write("### Konfirmasi Kolom Excel:")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            name_col = st.selectbox("Pilih kolom Nama Toko:", cols, index=cols.index(find_best_col(['nama', 'toko', 'outlet', 'name'])))
+        with c2:
+            lat_col = st.selectbox("Pilih kolom Latitude:", cols, index=cols.index(find_best_col(['lat', 'latitude'])))
+        with c3:
+            lon_col = st.selectbox("Pilih kolom Longitude:", cols, index=cols.index(find_best_col(['long', 'lng', 'longitude'])))
+
+    # 2. PROSES ROUTING
+    with st.spinner('AI sedang menganalisis rute paling efisien dan realistis...'):
+        locations = df[[lat_col, lon_col]].values.tolist()
+        names = df[name_col].tolist()
+
+        # Hitung Matriks Durasi
+        coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
         url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
         matrix = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()['durations']
 
-        # LOGIKA FLEXIBLE AI: Hybrid Nearest Neighbor dengan Directional Bias
-        # Kita tidak langsung memilih yang paling dekat, tapi memilih yang efisien secara alur
+        # Logika Hybrid (Fleksibel)
         current_node = 0 
         unvisited = list(range(1, len(locations)))
         route_indices = [0]
+        total_travel_seconds = 0
         
         while unvisited:
-            # Cari kandidat dengan bobot: (Durasi * 0.7) + (Efek arah * 0.3)
-            # Ini memberi fleksibilitas: jika toko terdekat sedikit lebih lama tapi arahnya sama, 
-            # AI akan memilih toko tersebut daripada putar balik.
             best_node = None
             min_score = float('inf')
-            
             for next_node in unvisited:
-                duration = matrix[current_node][next_node]
-                # Memberi sedikit 'penalty' jika harus balik arah (sederhana)
-                # Jika kita sudah punya history, bisa dihitung arahnya. 
-                # Untuk script ini, kita gunakan durasi sebagai acuan utama tapi lebih dinamis
-                score = duration
-                
+                score = matrix[current_node][next_node]
                 if score < min_score:
                     min_score = score
                     best_node = next_node
             
+            total_travel_seconds += matrix[current_node][best_node]
             route_indices.append(best_node)
             unvisited.remove(best_node)
             current_node = best_node
         
+        total_travel_seconds += matrix[current_node][0]
         route_indices.append(0)
 
-        # Proses Tabel
-        table_data = []
-        total_travel_seconds = 0
-        for i in range(len(route_indices) - 1):
-            curr = route_indices[i]
-            next_n = route_indices[i+1]
-            dur_sec = round(matrix[curr][next_n])
-            total_travel_seconds += dur_sec
-            
-            # Batching
-            end_batch = min(i + 10, len(route_indices) - 1)
-            batch_locations = [locations[route_indices[idx]] for idx in range(i, end_batch + 1)]
-            
-            table_data.append({
-                "Checklist": False,
-                "No": i + 1,
-                "Dari": names[curr],
-                "Ke": names[next_n],
-                "Waktu (Detik)": dur_sec,
-                "Waktu (Menit)": round(dur_sec / 60, 2),
-                "Link Perjalanan (1 Toko)": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
-                "Link 10 Toko Kedepan": get_batch_gmaps_link(batch_locations)
-            })
-
+    # 3. TAMPILAN TABEL & MAP
     st.success("Rute Selesai Dihitung!")
     
-    # UI Output
+    table_data = []
+    for i in range(len(route_indices) - 1):
+        curr = route_indices[i]
+        next_n = route_indices[i+1]
+        
+        dur_sec = round(matrix[curr][next_n])
+        end_batch = min(i + 10, len(route_indices) - 1)
+        batch_locations = [locations[route_indices[idx]] for idx in range(i, end_batch + 1)]
+        
+        table_data.append({
+            "Checklist": False,
+            "No": i + 1,
+            "Dari": names[curr],
+            "Ke": names[next_n],
+            "Waktu (Detik)": dur_sec,
+            "Waktu (Menit)": round(dur_sec / 60, 2),
+            "Link Perjalanan (1 Toko)": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
+            "Link 10 Toko Kedepan": get_batch_gmaps_link(batch_locations)
+        })
+
     st.write("### Jadwal Kunjungan:")
     st.data_editor(
         pd.DataFrame(table_data),
