@@ -25,6 +25,8 @@ def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
 
 st.set_page_config(layout="wide")
 st.title("📍 Wismilak Route Optimizer Pro")
+# Deskripsi tambahan di bawah judul
+st.caption("Pastikan rute koordinat benar benar sesuai agar tidak terjadi kesalahan penghitungan rute")
 
 uploaded_file = st.file_uploader("Upload File Excel Toko (.xlsx)", type=["xlsx"])
 
@@ -59,9 +61,9 @@ if uploaded_file:
         next_n = route_indices[i+1]
         
         dur_sec = round(matrix[curr][next_n])
-        dur_min = round(dur_sec / 60, 2) # Perhitungan Menit
+        dur_min = round(dur_sec / 60, 2)
         
-        # Logika 10 toko ke depan mulai dari toko saat ini (i)
+        # Logika 10 toko ke depan
         end_batch = min(i + 10, len(route_indices) - 1)
         batch_indices = route_indices[i : end_batch + 1]
         batch_locations = [locations[idx] for idx in batch_indices]
