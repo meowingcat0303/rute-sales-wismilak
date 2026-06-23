@@ -44,11 +44,16 @@ if uploaded_file:
     unvisited = list(range(1, len(locations)))
     route_indices = [0]
     
+    total_travel_seconds = 0 
+
     while unvisited:
         next_node = min(unvisited, key=lambda x: matrix[current_node][x])
+        total_travel_seconds += matrix[current_node][next_node]
         route_indices.append(next_node)
         unvisited.remove(next_node)
         current_node = next_node
+    
+    total_travel_seconds += matrix[current_node][0]
     route_indices.append(0)
 
     st.success("Rute Berhasil Dihitung!")
@@ -78,9 +83,12 @@ if uploaded_file:
         })
     
     df_result = pd.DataFrame(table_data)
-    
-    # Menambahkan kolom "Checklist" di posisi paling awal
+    # Kolom diubah menjadi "Checklist"
     df_result.insert(0, "Checklist", False)
+    
+    # Menampilkan total waktu dengan komponen Metric
+    total_hours = int(total_travel_seconds // 3600)
+    total_minutes = int((total_travel_seconds % 3600) // 60)
     
     st.write("### Jadwal Kunjungan:")
     st.data_editor(
@@ -93,6 +101,8 @@ if uploaded_file:
         use_container_width=True,
         hide_index=True
     )
+    
+    st.metric(label="Total Estimasi Waktu Perjalanan", value=f"{total_hours} Jam {total_minutes} Menit")
     
     # Tampilan Peta
     st.write("### Peta Rute:")
