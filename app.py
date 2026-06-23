@@ -9,9 +9,7 @@ def get_gmaps_link(lat1, lon1, lat2, lon2):
 
 # Fungsi untuk membuat link Rute Panjang (10 Toko ke Depan)
 def get_batch_gmaps_link(locations_list):
-    # Format: https://www.google.com/maps/dir/...
     base_url = "https://www.google.com/maps/dir/"
-    # Memasukkan semua titik lokasi dalam batch ke dalam link
     coords_path = "/".join([f"{loc[0]},{loc[1]}" for loc in locations_list])
     return base_url + coords_path
 
@@ -59,24 +57,23 @@ if uploaded_file:
     for i in range(len(route_indices) - 1):
         curr = route_indices[i]
         next_n = route_indices[i+1]
-        dur_sec = round(matrix[curr][next_n])
         
-        # LOGIKA BARU: Ambil 10 toko ke depan mulai dari toko saat ini (i)
-        # Kita ambil indeks dari i sampai i+10
+        dur_sec = round(matrix[curr][next_n])
+        dur_min = round(dur_sec / 60, 2) # Perhitungan Menit
+        
+        # Logika 10 toko ke depan mulai dari toko saat ini (i)
         end_batch = min(i + 10, len(route_indices) - 1)
         batch_indices = route_indices[i : end_batch + 1]
         batch_locations = [locations[idx] for idx in batch_indices]
-        
-        # Buat link batch
-        batch_link = get_batch_gmaps_link(batch_locations)
         
         table_data.append({
             "No": i + 1,
             "Dari": names[curr],
             "Ke": names[next_n],
             "Waktu (Detik)": dur_sec,
+            "Waktu (Menit)": dur_min,
             "Link Perjalanan (1 Toko)": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
-            "Link 10 Toko Kedepan": batch_link
+            "Link 10 Toko Kedepan": get_batch_gmaps_link(batch_locations)
         })
     
     df_result = pd.DataFrame(table_data)
