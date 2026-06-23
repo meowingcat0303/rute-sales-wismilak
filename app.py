@@ -92,7 +92,7 @@ if uploaded_file:
                 "Link 10 Toko Kedepan": get_batch_gmaps_link(batch_locations)
             })
 
-    st.success("Rute Selesai Dihitung (Hybrid AI Mode)!")
+    st.success("Rute Selesai Dihitung!")
     
     # UI Output
     st.write("### Jadwal Kunjungan:")
