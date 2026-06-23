@@ -3,10 +3,16 @@ import pandas as pd
 import requests, folium
 from streamlit.components.v1 import html
 
-# Fungsi untuk link Google Maps
+# Fungsi untuk link Google Maps Individual (A ke B)
 def get_gmaps_link(lat1, lon1, lat2, lon2):
-    # Menggunakan format navigasi sederhana antar titik
     return f"https://www.google.com/maps/dir/?api=1&origin={lat1},{lon1}&destination={lat2},{lon2}&travelmode=driving"
+
+# Fungsi untuk membuat link Rute Panjang (Batch 10 Toko)
+def get_batch_gmaps_link(locations_list):
+    # Format: google.com/maps/dir/lat,lng/lat,lng/...
+    base_url = "https://www.google.com/maps/dir/"
+    coords_path = "/".join([f"{loc[0]},{loc[1]}" for loc in locations_list])
+    return base_url + coords_path
 
 # Fungsi untuk geometri jalan
 def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
@@ -19,7 +25,7 @@ def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
         return [[start_lat, start_lon], [end_lat, end_lon]]
 
 st.set_page_config(layout="wide")
-st.title("📍 Wismilak Route Optimizer Pro")
+st.title("📍 Wismilak Route Optimizer Pro (Batch Mode)")
 
 uploaded_file = st.file_uploader("Upload File Excel Toko (.xlsx)", type=["xlsx"])
 
@@ -47,38 +53,49 @@ if uploaded_file:
 
     st.success("Rute Berhasil Dihitung!")
     
-    # Menyiapkan data untuk tabel
+    # Menyiapkan data
     table_data = []
     total_seconds = 0
+    
+    # Membagi rute menjadi batch (per 10 toko)
+    # Kita ambil rute asli (tanpa balik ke kantor di akhir untuk perhitungan batch yang rapi)
+    route_for_batches = route_indices[:-1] 
     
     for i in range(len(route_indices) - 1):
         curr = route_indices[i]
         next_n = route_indices[i+1]
-        
         dur_sec = round(matrix[curr][next_n])
         total_seconds += dur_sec
+        
+        # Logika Batch (1-10, 11-20, dst)
+        batch_number = (i // 10) + 1
+        start_idx = (batch_number - 1) * 10
+        end_idx = min(start_idx + 10, len(route_for_batches))
+        
+        # Ambil koordinat untuk batch tersebut
+        batch_locations = [locations[route_for_batches[j]] for j in range(start_idx, end_idx)]
+        batch_link = get_batch_gmaps_link(batch_locations)
         
         table_data.append({
             "No": i + 1,
             "Dari": names[curr],
             "Ke": names[next_n],
             "Waktu (Detik)": dur_sec,
-            "Total Waktu (Menit)": round(total_seconds / 60, 1),
-            "Link Maps": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1])
+            "Link Perjalanan (A ke B)": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
+            "Link Rute Batch": batch_link
         })
     
     df_result = pd.DataFrame(table_data)
     
-    st.write("### Tabel Rute (Bisa Copy ke Excel):")
+    st.write("### Jadwal Kunjungan (Copy ke Excel):")
     st.dataframe(
         df_result,
         column_config={
-            "Link Maps": st.column_config.LinkColumn(display_text="Buka Navigasi")
+            "Link Perjalanan (A ke B)": st.column_config.LinkColumn(display_text="Buka A->B"),
+            "Link Rute Batch": st.column_config.LinkColumn(display_text="Buka Batch 10")
         },
         use_container_width=True
     )
-    
-    st.write(f"**Total estimasi waktu tempuh perjalanan: {round(total_seconds / 60)} menit.**")
     
     # Tampilan Peta
     st.write("### Peta Rute:")
