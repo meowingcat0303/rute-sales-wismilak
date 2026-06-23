@@ -24,9 +24,9 @@ def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
         return [[start_lat, start_lon], [end_lat, end_lon]]
 
 st.set_page_config(layout="wide")
-st.title("📍 Wismilak Route Optimizer Pro")
+st.title("📍 Wismilak Route Optimizer (developed by Ghalib Damarillah Asahlintang)")
 # Deskripsi tambahan di bawah judul
-st.caption("Pastikan rute koordinat benar benar sesuai agar tidak terjadi kesalahan penghitungan rute")
+st.caption("Pastikan rute koordinat benar benar sesuai agar tidak terjadi kesalahan dalam penghitungan rute")
 
 uploaded_file = st.file_uploader("Upload File Excel Toko (.xlsx)", type=["xlsx"])
 
