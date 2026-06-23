@@ -24,59 +24,56 @@ def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
         return [[start_lat, start_lon], [end_lat, end_lon]]
 
 st.set_page_config(layout="wide")
-st.title("📍 Wismilak Route Optimizer Pro")
-st.caption("Pola Rute: Linear Sweep (Meminimalisir Putar Balik)")
+
+# Header Baru
+st.title("📍 Wismilak Route Optimizer (Developed by Ghalib Damarillah Asahlintang)")
+# Caption Baru
+st.caption("Pastikan rute koordinat benar benar sesuai agar tidak terjadi kesalahan penghitungan rute")
 
 uploaded_file = st.file_uploader("Upload File Excel Toko (.xlsx)", type=["xlsx"])
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file)
-    
-    # Menambahkan kolom index untuk tracking
-    df['id'] = range(len(df))
-    locations = df[['Latitude', 'Longitude']].values.tolist()
-    names = df['Outlet Name'].tolist()
-
-    # LOGIKA BARU: Linear Sorting
-    # Kita urutkan berdasarkan Latitude atau Longitude (bergantung pada orientasi rute Anda)
-    # Ini akan membuat rute bergerak searah (linear) dan menghindari zigzag
-    df = df.sort_values(by=['Latitude', 'Longitude']) 
-    sorted_locations = df[['Latitude', 'Longitude']].values.tolist()
-    sorted_names = df['Outlet Name'].tolist()
-
-    # Hitung Jarak berurutan (tanpa optimasi zig-zag)
-    total_travel_seconds = 0
-    table_data = []
-
-    for i in range(len(sorted_locations) - 1):
-        curr = sorted_locations[i]
-        next_n = sorted_locations[i+1]
+    # Menggunakan Spinner untuk indikator Loading
+    with st.spinner('Sedang menghitung rute optimal dan memproses data, mohon tunggu...'):
+        df = pd.read_excel(uploaded_file)
         
-        # Hitung durasi antar titik urut
-        url = f"http://router.project-osrm.org/route/v1/driving/{curr[1]},{curr[0]};{next_n[1]},{next_n[0]}"
-        res = requests.get(url).json()
-        dur_sec = res['routes'][0]['duration']
-        total_travel_seconds += dur_sec
-        dur_min = round(dur_sec / 60, 2)
+        # LOGIKA LINEAR SWEEP (Sorting)
+        df = df.sort_values(by=['Latitude', 'Longitude']) 
+        sorted_locations = df[['Latitude', 'Longitude']].values.tolist()
+        sorted_names = df['Outlet Name'].tolist()
+
+        total_travel_seconds = 0
+        table_data = []
+
+        for i in range(len(sorted_locations) - 1):
+            curr = sorted_locations[i]
+            next_n = sorted_locations[i+1]
+            
+            # Hitung durasi antar titik urut
+            url = f"http://router.project-osrm.org/route/v1/driving/{curr[1]},{curr[0]};{next_n[1]},{next_n[0]}"
+            res = requests.get(url).json()
+            dur_sec = res['routes'][0]['duration']
+            total_travel_seconds += dur_sec
+            dur_min = round(dur_sec / 60, 2)
+            
+            # Batching 10 toko ke depan
+            end_batch = min(i + 10, len(sorted_locations) - 1)
+            batch_locations = sorted_locations[i : end_batch + 1]
+            
+            table_data.append({
+                "Checklist": False,
+                "No": i + 1,
+                "Dari": sorted_names[i],
+                "Ke": sorted_names[i+1],
+                "Waktu (Detik)": round(dur_sec),
+                "Waktu (Menit)": dur_min,
+                "Link Perjalanan (1 Toko)": get_gmaps_link(curr[0], curr[1], next_n[0], next_n[1]),
+                "Link 10 Toko Kedepan": get_batch_gmaps_link(batch_locations)
+            })
         
-        # Batching 10 toko ke depan
-        end_batch = min(i + 10, len(sorted_locations) - 1)
-        batch_locations = sorted_locations[i : end_batch + 1]
+        df_result = pd.DataFrame(table_data)
         
-        table_data.append({
-            "Checklist": False,
-            "No": i + 1,
-            "Dari": sorted_names[i],
-            "Ke": sorted_names[i+1],
-            "Waktu (Detik)": round(dur_sec),
-            "Waktu (Menit)": dur_min,
-            "Link Perjalanan (1 Toko)": get_gmaps_link(curr[0], curr[1], next_n[0], next_n[1]),
-            "Link 10 Toko Kedepan": get_batch_gmaps_link(batch_locations)
-        })
-    
-    df_result = pd.DataFrame(table_data)
-    
-    st.success("Rute Berhasil Dihitung (Pola Linear/Searah)!")
+    st.success("Rute Berhasil Dihitung!")
     
     st.write("### Jadwal Kunjungan:")
     st.data_editor(
@@ -99,7 +96,6 @@ if uploaded_file:
     st.write("### Peta Rute:")
     m = folium.Map(location=sorted_locations[0], zoom_start=15)
     
-    # Gambar garis rute
     for i in range(len(sorted_locations) - 1):
         start, end = sorted_locations[i], sorted_locations[i+1]
         path_coords = get_road_geometry(start[0], start[1], end[0], end[1])
