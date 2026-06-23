@@ -3,7 +3,7 @@ import pandas as pd
 import requests, folium
 from streamlit.components.v1 import html
 
-# Fungsi untuk link Google Maps Individual (A ke B)
+# Fungsi untuk link Google Maps Individual
 def get_gmaps_link(lat1, lon1, lat2, lon2):
     return f"https://www.google.com/maps/dir/?api=1&origin={lat1},{lon1}&destination={lat2},{lon2}&travelmode=driving"
 
@@ -25,70 +25,58 @@ def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
 
 st.set_page_config(layout="wide")
 st.title("📍 Wismilak Route Optimizer Pro")
-st.caption("Pastikan rute koordinat benar benar sesuai agar tidak terjadi kesalahan penghitungan rute")
+st.caption("Pola Rute: Linear Sweep (Meminimalisir Putar Balik)")
 
 uploaded_file = st.file_uploader("Upload File Excel Toko (.xlsx)", type=["xlsx"])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
+    
+    # Menambahkan kolom index untuk tracking
+    df['id'] = range(len(df))
     locations = df[['Latitude', 'Longitude']].values.tolist()
     names = df['Outlet Name'].tolist()
 
-    # Hitung Matriks Jarak
-    coords = ";".join([f"{lon},{lat}" for lat, lon in locations])
-    url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
-    matrix = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()['durations']
+    # LOGIKA BARU: Linear Sorting
+    # Kita urutkan berdasarkan Latitude atau Longitude (bergantung pada orientasi rute Anda)
+    # Ini akan membuat rute bergerak searah (linear) dan menghindari zigzag
+    df = df.sort_values(by=['Latitude', 'Longitude']) 
+    sorted_locations = df[['Latitude', 'Longitude']].values.tolist()
+    sorted_names = df['Outlet Name'].tolist()
 
-    # Logika Nearest Neighbor
-    current_node = 0
-    unvisited = list(range(1, len(locations)))
-    route_indices = [0]
-    
-    total_travel_seconds = 0 
-
-    while unvisited:
-        next_node = min(unvisited, key=lambda x: matrix[current_node][x])
-        total_travel_seconds += matrix[current_node][next_node]
-        route_indices.append(next_node)
-        unvisited.remove(next_node)
-        current_node = next_node
-    
-    total_travel_seconds += matrix[current_node][0]
-    route_indices.append(0)
-
-    st.success("Rute Berhasil Dihitung!")
-    
+    # Hitung Jarak berurutan (tanpa optimasi zig-zag)
+    total_travel_seconds = 0
     table_data = []
-    # Loop untuk membuat baris tabel
-    for i in range(len(route_indices) - 1):
-        curr = route_indices[i]
-        next_n = route_indices[i+1]
+
+    for i in range(len(sorted_locations) - 1):
+        curr = sorted_locations[i]
+        next_n = sorted_locations[i+1]
         
-        dur_sec = round(matrix[curr][next_n])
+        # Hitung durasi antar titik urut
+        url = f"http://router.project-osrm.org/route/v1/driving/{curr[1]},{curr[0]};{next_n[1]},{next_n[0]}"
+        res = requests.get(url).json()
+        dur_sec = res['routes'][0]['duration']
+        total_travel_seconds += dur_sec
         dur_min = round(dur_sec / 60, 2)
         
-        # Logika 10 toko ke depan
-        end_batch = min(i + 10, len(route_indices) - 1)
-        batch_indices = route_indices[i : end_batch + 1]
-        batch_locations = [locations[idx] for idx in batch_indices]
+        # Batching 10 toko ke depan
+        end_batch = min(i + 10, len(sorted_locations) - 1)
+        batch_locations = sorted_locations[i : end_batch + 1]
         
         table_data.append({
+            "Checklist": False,
             "No": i + 1,
-            "Dari": names[curr],
-            "Ke": names[next_n],
-            "Waktu (Detik)": dur_sec,
+            "Dari": sorted_names[i],
+            "Ke": sorted_names[i+1],
+            "Waktu (Detik)": round(dur_sec),
             "Waktu (Menit)": dur_min,
-            "Link Perjalanan (1 Toko)": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
+            "Link Perjalanan (1 Toko)": get_gmaps_link(curr[0], curr[1], next_n[0], next_n[1]),
             "Link 10 Toko Kedepan": get_batch_gmaps_link(batch_locations)
         })
     
     df_result = pd.DataFrame(table_data)
-    # Kolom diubah menjadi "Checklist"
-    df_result.insert(0, "Checklist", False)
     
-    # Menampilkan total waktu dengan komponen Metric
-    total_hours = int(total_travel_seconds // 3600)
-    total_minutes = int((total_travel_seconds % 3600) // 60)
+    st.success("Rute Berhasil Dihitung (Pola Linear/Searah)!")
     
     st.write("### Jadwal Kunjungan:")
     st.data_editor(
@@ -102,16 +90,21 @@ if uploaded_file:
         hide_index=True
     )
     
+    # Menampilkan total waktu
+    total_hours = int(total_travel_seconds // 3600)
+    total_minutes = int((total_travel_seconds % 3600) // 60)
     st.metric(label="Total Estimasi Waktu Perjalanan", value=f"{total_hours} Jam {total_minutes} Menit")
     
-    # Tampilan Peta
+    # Peta Rute
     st.write("### Peta Rute:")
-    m = folium.Map(location=locations[0], zoom_start=15)
-    for i in range(len(route_indices) - 1):
-        start, end = locations[route_indices[i]], locations[route_indices[i+1]]
+    m = folium.Map(location=sorted_locations[0], zoom_start=15)
+    
+    # Gambar garis rute
+    for i in range(len(sorted_locations) - 1):
+        start, end = sorted_locations[i], sorted_locations[i+1]
         path_coords = get_road_geometry(start[0], start[1], end[0], end[1])
-        folium.PolyLine(path_coords, color="blue", weight=5, opacity=0.8).add_to(m)
+        folium.PolyLine(path_coords, color="green", weight=5, opacity=0.8).add_to(m)
         
-    for i, node in enumerate(route_indices):
-        folium.Marker(locations[node], popup=names[node]).add_to(m)
+    for i, loc in enumerate(sorted_locations):
+        folium.Marker(loc, popup=sorted_names[i]).add_to(m)
     html(m._repr_html_(), height=500)
