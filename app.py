@@ -79,14 +79,14 @@ if uploaded_file:
     
     df_result = pd.DataFrame(table_data)
     
-    # Menambahkan kolom "Centang" di posisi paling awal
-    df_result.insert(0, "Centang", False)
+    # Menambahkan kolom "Checklist" di posisi paling awal
+    df_result.insert(0, "Checklist", False)
     
     st.write("### Jadwal Kunjungan:")
     st.data_editor(
         df_result,
         column_config={
-            "Centang": st.column_config.CheckboxColumn("Centang", default=False),
+            "Checklist": st.column_config.CheckboxColumn("Checklist", default=False),
             "Link Perjalanan (1 Toko)": st.column_config.LinkColumn(display_text="Buka A->B"),
             "Link 10 Toko Kedepan": st.column_config.LinkColumn(display_text="Buka Rute Batch")
         },
