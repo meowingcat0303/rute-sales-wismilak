@@ -17,7 +17,7 @@ def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
         return [[start_lat, start_lon], [end_lat, end_lon]]
 
 st.set_page_config(layout="wide")
-st.title("📍 Wismilak Route Optimizer (Road-Snapped)")
+st.title("📍 Wismilak Route Optimizer (developed by Ghalib Damarillah Asahlintang)")
 
 uploaded_file = st.file_uploader("Upload File Excel Toko (.xlsx)", type=["xlsx"])
 
