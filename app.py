@@ -24,9 +24,8 @@ def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
         return [[start_lat, start_lon], [end_lat, end_lon]]
 
 st.set_page_config(layout="wide")
-st.title("📍 Wismilak Route Optimizer (developed by Ghalib Damarillah Asahlintang)")
-# Deskripsi tambahan di bawah judul
-st.caption("Pastikan rute koordinat benar benar sesuai agar tidak terjadi kesalahan dalam penghitungan rute")
+st.title("📍 Wismilak Route Optimizer Pro")
+st.caption("Pastikan rute koordinat benar benar sesuai agar tidak terjadi kesalahan penghitungan rute")
 
 uploaded_file = st.file_uploader("Upload File Excel Toko (.xlsx)", type=["xlsx"])
 
@@ -80,14 +79,19 @@ if uploaded_file:
     
     df_result = pd.DataFrame(table_data)
     
+    # Menambahkan kolom "Centang" di posisi paling awal
+    df_result.insert(0, "Centang", False)
+    
     st.write("### Jadwal Kunjungan:")
-    st.dataframe(
+    st.data_editor(
         df_result,
         column_config={
+            "Centang": st.column_config.CheckboxColumn("Centang", default=False),
             "Link Perjalanan (1 Toko)": st.column_config.LinkColumn(display_text="Buka A->B"),
             "Link 10 Toko Kedepan": st.column_config.LinkColumn(display_text="Buka Rute Batch")
         },
-        use_container_width=True
+        use_container_width=True,
+        hide_index=True
     )
     
     # Tampilan Peta
