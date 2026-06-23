@@ -5,6 +5,7 @@ from streamlit.components.v1 import html
 
 # Fungsi untuk link Google Maps
 def get_gmaps_link(lat1, lon1, lat2, lon2):
+    # Menggunakan format navigasi sederhana antar titik
     return f"https://www.google.com/maps/dir/?api=1&origin={lat1},{lon1}&destination={lat2},{lon2}&travelmode=driving"
 
 # Fungsi untuk geometri jalan
@@ -18,7 +19,7 @@ def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
         return [[start_lat, start_lon], [end_lat, end_lon]]
 
 st.set_page_config(layout="wide")
-st.title("📍 Wismilak Route Optimizer")
+st.title("📍 Wismilak Route Optimizer Pro")
 
 uploaded_file = st.file_uploader("Upload File Excel Toko (.xlsx)", type=["xlsx"])
 
@@ -46,33 +47,40 @@ if uploaded_file:
 
     st.success("Rute Berhasil Dihitung!")
     
-    # 1. Tampilan Tabel (Bisa di-copy ke Excel)
+    # Menyiapkan data untuk tabel
     table_data = []
+    total_seconds = 0
+    
     for i in range(len(route_indices) - 1):
         curr = route_indices[i]
         next_n = route_indices[i+1]
+        
+        dur_sec = round(matrix[curr][next_n])
+        total_seconds += dur_sec
         
         table_data.append({
             "No": i + 1,
             "Dari": names[curr],
             "Ke": names[next_n],
-            "Estimasi (Menit)": round(matrix[curr][next_n] / 60),
-            "Link Google Maps": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1])
+            "Waktu (Detik)": dur_sec,
+            "Total Waktu (Menit)": round(total_seconds / 60, 1),
+            "Link Maps": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1])
         })
     
     df_result = pd.DataFrame(table_data)
     
-    # Menampilkan sebagai tabel yang bisa dicopy
-    st.write("### Jadwal Kunjungan (Copy ke Excel):")
+    st.write("### Tabel Rute (Bisa Copy ke Excel):")
     st.dataframe(
         df_result,
         column_config={
-            "Link Google Maps": st.column_config.LinkColumn(display_text="Buka Maps")
+            "Link Maps": st.column_config.LinkColumn(display_text="Buka Navigasi")
         },
         use_container_width=True
     )
     
-    # 2. Tampilan Peta
+    st.write(f"**Total estimasi waktu tempuh perjalanan: {round(total_seconds / 60)} menit.**")
+    
+    # Tampilan Peta
     st.write("### Peta Rute:")
     m = folium.Map(location=locations[0], zoom_start=15)
     for i in range(len(route_indices) - 1):
