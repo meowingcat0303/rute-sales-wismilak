@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import requests, folium
-from ortools.constraint_solver import routing_enums_pb2, pywrapcp
 from streamlit.components.v1 import html
 
 # Fungsi untuk link Google Maps
@@ -19,7 +18,7 @@ def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
         return [[start_lat, start_lon], [end_lat, end_lon]]
 
 st.set_page_config(layout="wide")
-st.title("📍 Wismilak Route Optimizer Pro")
+st.title("📍 Wismilak Route Optimizer")
 
 uploaded_file = st.file_uploader("Upload File Excel Toko (.xlsx)", type=["xlsx"])
 
@@ -28,62 +27,59 @@ if uploaded_file:
     locations = df[['Latitude', 'Longitude']].values.tolist()
     names = df['Outlet Name'].tolist()
 
-    # Hitung Matriks Jarak & Waktu
+    # Hitung Matriks Jarak
     coords = ";".join([f"{lon},{lat}" for lat, lon in locations])
     url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
     matrix = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()['durations']
 
-    manager = pywrapcp.RoutingIndexManager(len(matrix), 1, 0)
-    routing = pywrapcp.RoutingModel(manager)
+    # Logika Nearest Neighbor
+    current_node = 0
+    unvisited = list(range(1, len(locations)))
+    route_indices = [0]
     
-    # Callback untuk menghitung waktu tempuh
-    def time_callback(from_index, to_index):
-        return int(matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
-    
-    routing.SetArcCostEvaluatorOfAllVehicles(routing.RegisterTransitCallback(time_callback))
-    params = pywrapcp.DefaultRoutingSearchParameters()
-    params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    solution = routing.SolveWithParameters(params)
+    while unvisited:
+        next_node = min(unvisited, key=lambda x: matrix[current_node][x])
+        route_indices.append(next_node)
+        unvisited.remove(next_node)
+        current_node = next_node
+    route_indices.append(0)
 
-    if solution:
-        idx = routing.Start(0)
-        route_indices = []
-        while not routing.IsEnd(idx):
-            route_indices.append(manager.IndexToNode(idx))
-            idx = solution.Value(routing.NextVar(idx))
-        route_indices.append(manager.IndexToNode(idx))
+    st.success("Rute Berhasil Dihitung!")
+    
+    # 1. Tampilan Tabel (Bisa di-copy ke Excel)
+    table_data = []
+    for i in range(len(route_indices) - 1):
+        curr = route_indices[i]
+        next_n = route_indices[i+1]
         
-        st.success("Rute Berhasil Dihitung!")
-        col1, col2 = st.columns([1, 2])
+        table_data.append({
+            "No": i + 1,
+            "Dari": names[curr],
+            "Ke": names[next_n],
+            "Estimasi (Menit)": round(matrix[curr][next_n] / 60),
+            "Link Google Maps": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1])
+        })
+    
+    df_result = pd.DataFrame(table_data)
+    
+    # Menampilkan sebagai tabel yang bisa dicopy
+    st.write("### Jadwal Kunjungan (Copy ke Excel):")
+    st.dataframe(
+        df_result,
+        column_config={
+            "Link Google Maps": st.column_config.LinkColumn(display_text="Buka Maps")
+        },
+        use_container_width=True
+    )
+    
+    # 2. Tampilan Peta
+    st.write("### Peta Rute:")
+    m = folium.Map(location=locations[0], zoom_start=15)
+    for i in range(len(route_indices) - 1):
+        start, end = locations[route_indices[i]], locations[route_indices[i+1]]
+        path_coords = get_road_geometry(start[0], start[1], end[0], end[1])
+        folium.PolyLine(path_coords, color="blue", weight=5, opacity=0.8).add_to(m)
         
-        with col1:
-            st.write("### Urutan Perjalanan:")
-            for i in range(len(route_indices) - 1):
-                curr = route_indices[i]
-                next_n = route_indices[i+1]
-                
-                # Hitung waktu dalam menit
-                duration_sec = matrix[curr][next_n]
-                duration_min = round(duration_sec / 60)
-                
-                # Link Maps
-                gmap_url = get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1])
-                
-                st.markdown(f"""
-                **{i+1}. {names[curr]}** ➔ {names[next_n]}
-                *Estimasi: {duration_min} menit*
-                [Buka di Google Maps]({gmap_url})
-                ---
-                """)
-            st.write(f"**{len(route_indices)}. {names[route_indices[-1]]} (Finish)**")
-        
-        with col2:
-            m = folium.Map(location=locations[0], zoom_start=14)
-            for i in range(len(route_indices) - 1):
-                start, end = locations[route_indices[i]], locations[route_indices[i+1]]
-                path_coords = get_road_geometry(start[0], start[1], end[0], end[1])
-                folium.PolyLine(path_coords, color="blue", weight=5).add_to(m)
-                
-            for i, node in enumerate(route_indices):
-                folium.Marker(locations[node], popup=names[node]).add_to(m)
-            html(m._repr_html_(), height=500)
+    for i, node in enumerate(route_indices):
+        folium.Marker(locations[node], popup=names[node]).add_to(m)
+    html(m._repr_html_(), height=500)
