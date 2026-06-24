@@ -7,7 +7,7 @@ import folium
 from streamlit.components.v1 import html
 
 # --- FUNGSI PDF ---
-def generate_pdf(df):
+def generate_pdf(df, has_kode):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", 'B', 14)
@@ -15,21 +15,27 @@ def generate_pdf(df):
     pdf.set_font("Arial", size=10)
     pdf.ln(5)
     pdf.set_fill_color(200, 200, 200)
-    # Header kolom sesuai request
+    
+    # Header Dinamis
     pdf.cell(10, 10, "No", border=1, fill=True)
-    pdf.cell(30, 10, "Kode", border=1, fill=True)
+    if has_kode: pdf.cell(30, 10, "Kode", border=1, fill=True)
     pdf.cell(50, 10, "Nama Toko", border=1, fill=True)
-    pdf.cell(25, 10, "Lat", border=1, fill=True)
-    pdf.cell(25, 10, "Long", border=1, fill=True)
+    pdf.cell(30, 10, "Lat", border=1, fill=True)
+    pdf.cell(30, 10, "Long", border=1, fill=True)
+    pdf.cell(40, 10, "Link Maps", border=1, fill=True)
     pdf.ln()
     
+    # Isi
     i = 1
     for _, row in df.iterrows():
         pdf.cell(10, 10, str(i), border=1)
-        pdf.cell(30, 10, str(row.iloc[0]), border=1) # Kode
-        pdf.cell(50, 10, str(row.iloc[1])[:25], border=1) # Nama
-        pdf.cell(25, 10, str(row.iloc[2]), border=1) # Lat
-        pdf.cell(25, 10, str(row.iloc[3]), border=1) # Long
+        if has_kode: pdf.cell(30, 10, str(row.iloc[1]), border=1) # Kolom ke-2 (Kode)
+        pdf.cell(50, 10, str(row.iloc[0 if not has_kode else 2])[:25], border=1)
+        pdf.cell(30, 10, str(row.iloc[1 if not has_kode else 3]), border=1)
+        pdf.cell(30, 10, str(row.iloc[2 if not has_kode else 4]), border=1)
+        pdf.set_text_color(0, 0, 255)
+        pdf.cell(40, 10, "Klik Disini", border=1, link=str(row.iloc[-1]))
+        pdf.set_text_color(0, 0, 0)
         pdf.ln()
         i += 1
     return pdf.output(dest='S').encode('latin-1')
@@ -59,35 +65,39 @@ if st.session_state['data_storage']:
     df = st.session_state['data_storage'][selected_file]
     cols = df.columns.tolist()
     
-    # Pemilihan Kolom
-    kode_col = st.selectbox("Kolom Kode Toko:", cols, index=cols.index([c for c in cols if 'kode' in c.lower()][0] if any('kode' in c.lower() for c in cols) else cols[0]))
-    name_col = st.selectbox("Kolom Nama:", cols, index=cols.index([c for c in cols if 'nama' in c.lower() or 'toko' in c.lower()][0] if any('nama' in c.lower() or 'toko' in c.lower() for c in cols) else cols[1] if len(cols)>1 else cols[0]))
-    lat_col = st.selectbox("Kolom Lat:", cols, index=cols.index([c for c in cols if 'lat' in c.lower()][0] if any('lat' in c.lower() for c in cols) else cols[2] if len(cols)>2 else cols[0]))
-    lon_col = st.selectbox("Kolom Long:", cols, index=cols.index([c for c in cols if 'long' in c.lower() or 'lng' in c.lower()][0] if any('long' in c.lower() or 'lng' in c.lower() for c in cols) else cols[3] if len(cols)>3 else cols[0]))
+    # Pemilihan Kolom (Kode dibuat opsional)
+    kode_opt = ["Tidak Ada"] + cols
+    kode_col = st.selectbox("Kolom Kode Toko (Opsional):", kode_opt)
+    
+    name_col = st.selectbox("Kolom Nama:", cols, index=cols.index([c for c in cols if 'nama' in c.lower() or 'toko' in c.lower()][0] if any('nama' in c.lower() or 'toko' in c.lower() for c in cols) else cols[0]))
+    lat_col = st.selectbox("Kolom Lat:", cols, index=cols.index([c for c in cols if 'lat' in c.lower()][0] if any('lat' in c.lower() for c in cols) else cols[1] if len(cols)>1 else cols[0]))
+    lon_col = st.selectbox("Kolom Long:", cols, index=cols.index([c for c in cols if 'long' in c.lower() or 'lng' in c.lower()][0] if any('long' in c.lower() or 'lng' in c.lower() for c in cols) else cols[2] if len(cols)>2 else cols[0]))
 
     tab1, tab2 = st.tabs(["📂 Mode A: List Koordinat", "🚀 Mode B: Optimasi Rute"])
 
     with tab1:
         st.subheader("Mode A: List Koordinat")
+        has_kode = kode_col != "Tidak Ada"
         
-        # Penyiapan Data Export
-        df_export = df[[kode_col, name_col, lat_col, lon_col]].copy()
+        # Prepare Data
+        cols_to_use = [name_col, lat_col, lon_col]
+        if has_kode: cols_to_use = [kode_col] + cols_to_use
+        
+        df_export = df[cols_to_use].copy()
+        df_export['Link Maps'] = df.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
         df_export.insert(0, "No", range(1, 1 + len(df_export)))
         
         st.data_editor(df_export, use_container_width=True, hide_index=True)
         
-        # Download Buttons
         c1, c2 = st.columns(2)
-        # PDF
         pdf_bytes = generate_pdf(df_export)
         c1.download_button("📥 Download PDF", pdf_bytes, "Daftar_Toko.pdf", "application/pdf")
-        # Excel
+        
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
             df_export.to_excel(writer, index=False)
         c2.download_button("📥 Download Excel", excel_buffer.getvalue(), "Daftar_Toko.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         
-        # Peta Mode A
         m_a = folium.Map(location=[df[lat_col].mean(), df[lon_col].mean()], zoom_start=13)
         for _, row in df.iterrows():
             folium.Marker([row[lat_col], row[lon_col]], popup=row[name_col]).add_to(m_a)
@@ -102,8 +112,7 @@ if st.session_state['data_storage']:
                 coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
                 url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
                 data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
-                matrix = data['durations']
-                distances = data['distances']
+                matrix, distances = data['durations'], data['distances']
                 
                 route_indices, total_seconds = [0], 0
                 unvisited = list(range(1, len(locations)))
@@ -129,7 +138,8 @@ if st.session_state['data_storage']:
                         "Rute 10 toko kedepan": get_batch_gmaps_link(batch_locs)
                     })
                 
-                st.data_editor(pd.DataFrame(table_data), 
+                df_res = pd.DataFrame(table_data)
+                st.data_editor(df_res, 
                                column_config={
                                    "Navigasi A->B": st.column_config.LinkColumn("Navigasi A->B", display_text="🗺️ Cek Jarak/Rute"),
                                    "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")
