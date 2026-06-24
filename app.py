@@ -68,7 +68,6 @@ if st.session_state['data_storage']:
         st.data_editor(raw_data[[name_col, lat_col, lon_col, 'Link Maps']], column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True)
         st.download_button("📥 Download PDF (Bisa Klik Link)", generate_pdf(raw_data[[name_col, lat_col, lon_col, 'Link Maps']]), "Daftar_Toko.pdf", "application/pdf")
         
-        # Peta Mode A
         m_a = folium.Map(location=[df[lat_col].mean(), df[lon_col].mean()], zoom_start=13)
         for _, row in df.iterrows():
             folium.Marker([row[lat_col], row[lon_col]], popup=row[name_col]).add_to(m_a)
@@ -81,9 +80,12 @@ if st.session_state['data_storage']:
                 locations = df[[lat_col, lon_col]].values.tolist()
                 names = df[name_col].tolist()
                 coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
-                matrix = requests.get(f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration", headers={'User-Agent': 'Sales/1.0'}).json()['durations']
+                # Menambah annotations=duration,distance untuk mendapatkan jarak
+                url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
+                data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
+                matrix = data['durations']
+                distances = data['distances']
                 
-                # Optimasi
                 route_indices, total_seconds = [0], 0
                 unvisited = list(range(1, len(locations)))
                 while unvisited:
@@ -97,23 +99,27 @@ if st.session_state['data_storage']:
                 for i in range(len(route_indices) - 1):
                     curr, next_n = route_indices[i], route_indices[i+1]
                     batch_locs = [locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))]
+                    
                     table_data.append({
                         "Checklist": False,
                         "No": i + 1,
                         "Dari": names[curr],
                         "Ke": names[next_n],
                         "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2),
+                        "Jarak (KM)": round(distances[curr][next_n] / 1000, 2), # Fitur Baru
                         "Rute 10 toko kedepan": get_batch_gmaps_link(batch_locs)
                     })
                 
-                st.data_editor(pd.DataFrame(table_data), column_config={"Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")}, use_container_width=True)
+                # hide_index=True menghilangkan urutan angka kiri
+                st.data_editor(pd.DataFrame(table_data), 
+                               column_config={"Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")}, 
+                               use_container_width=True, hide_index=True)
+                
                 st.metric("Total Waktu", f"{int(total_seconds//3600)} Jam {int((total_seconds%3600)//60)} Menit")
                 
-                # Peta Mode B
                 m_b = folium.Map(location=locations[0], zoom_start=15)
                 for i in range(len(route_indices) - 1):
-                    start, end = locations[route_indices[i]], locations[route_indices[i+1]]
-                    folium.PolyLine([start, end], color="blue", weight=5).add_to(m_b)
+                    folium.PolyLine([locations[route_indices[i]], locations[route_indices[i+1]]], color="blue", weight=5).add_to(m_b)
                 for i, node in enumerate(route_indices):
                     folium.Marker(locations[node], popup=names[node]).add_to(m_b)
                 html(m_b._repr_html_(), height=400)
