@@ -5,3 +5,4 @@ folium
 ortools
 openpyxl
 fpdf
+xlsxwriter
