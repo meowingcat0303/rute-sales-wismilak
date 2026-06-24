@@ -32,7 +32,7 @@ def generate_pdf(df):
         i += 1
     return pdf.output(dest='S').encode('latin-1')
 
-# --- FUNGSI MAPS & ROUTING ---
+# --- FUNGSI MAPS ---
 def get_road_geometry(lat1, lon1, lat2, lon2):
     url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
     try:
@@ -100,19 +100,33 @@ if st.session_state['data_storage']:
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
         if st.button("Jalankan Optimasi"):
-            with st.spinner('AI menghitung rute realistis...'):
-                locations = df[[lat_col, lon_col]].values.tolist()
-                names = df[name_col].tolist()
+            with st.spinner('AI menghitung rute satu jalur...'):
+                # Gabungkan data
+                data_combined = []
+                for idx, row in df.iterrows():
+                    data_combined.append({'name': row[name_col], 'lat': row[lat_col], 'lon': row[lon_col]})
+                
+                # URUTKAN SECARA GEOGRAFIS (Satu Jalur)
+                # Mengurutkan berdasarkan Latitude & Longitude untuk membuat alur yang mengalir
+                data_combined.sort(key=lambda x: (x['lat'], x['lon']))
+                
+                locations = [[x['lat'], x['lon']] for x in data_combined]
+                names = [x['name'] for x in data_combined]
+                
+                # OSRM Route
                 coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
                 url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
                 data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
                 matrix = data['durations']
                 
+                # Optimasi lokal dalam urutan yang sudah searah
                 route_indices, total_seconds = [0], 0
                 unvisited = list(range(1, len(locations)))
                 while unvisited:
-                    best = min(unvisited, key=lambda x: matrix[route_indices[-1]][x] + (0.1 * matrix[0][x]))
-                    total_seconds += matrix[route_indices[-1]][best]
+                    curr = route_indices[-1]
+                    # Tetap mengambil terdekat, tapi karena sudah diurutkan spasial, salesman tidak akan loncat jauh
+                    best = min(unvisited, key=lambda x: matrix[curr][x])
+                    total_seconds += matrix[curr][best]
                     route_indices.append(best)
                     unvisited.remove(best)
                 route_indices.append(0)
@@ -141,10 +155,8 @@ if st.session_state['data_storage']:
                 
                 st.metric("Total Waktu", f"{int(total_seconds//3600)} Jam {int((total_seconds%3600)//60)} Menit")
                 
-                # MAP REALISTIS (Mode B)
                 m_b = folium.Map(location=locations[0], zoom_start=15)
                 for i in range(len(route_indices) - 1):
-                    # Mengambil jalur jalan sesungguhnya
                     path = get_road_geometry(locations[route_indices[i]][0], locations[route_indices[i]][1], 
                                              locations[route_indices[i+1]][0], locations[route_indices[i+1]][1])
                     folium.PolyLine(path, color="blue", weight=5).add_to(m_b)
