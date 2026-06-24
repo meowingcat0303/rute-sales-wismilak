@@ -6,7 +6,7 @@ import io
 import folium
 from streamlit.components.v1 import html
 
-# --- FUNGSI PDF ---
+# --- FUNGSI PDF (DIPERBAIKI) ---
 def generate_pdf(df):
     pdf = FPDF()
     pdf.add_page()
@@ -15,21 +15,26 @@ def generate_pdf(df):
     pdf.set_font("Arial", size=10)
     pdf.ln(5)
     pdf.set_fill_color(200, 200, 200)
+    
+    cols = df.columns.tolist()
+    # Header
     pdf.cell(10, 10, "No", border=1, fill=True)
-    pdf.cell(30, 10, "Kode", border=1, fill=True)
-    pdf.cell(50, 10, "Nama Toko", border=1, fill=True)
-    pdf.cell(25, 10, "Lat", border=1, fill=True)
-    pdf.cell(25, 10, "Long", border=1, fill=True)
+    # Header Dinamis (semua kolom kecuali No dan Link Maps)
+    for c in cols[1:-1]:
+        pdf.cell(35, 10, str(c), border=1, fill=True)
+    pdf.cell(20, 10, "Maps", border=1, fill=True)
     pdf.ln()
-    i = 1
+    
+    # Isi
     for _, row in df.iterrows():
-        pdf.cell(10, 10, str(i), border=1)
-        pdf.cell(30, 10, str(row.iloc[0]), border=1)
-        pdf.cell(50, 10, str(row.iloc[1])[:25], border=1)
-        pdf.cell(25, 10, str(row.iloc[2]), border=1)
-        pdf.cell(25, 10, str(row.iloc[3]), border=1)
+        pdf.cell(10, 10, str(row['No']), border=1)
+        for c in cols[1:-1]:
+            pdf.cell(35, 10, str(row[c])[:20], border=1)
+        
+        # Link Maps yang bisa diklik
+        pdf.cell(20, 10, "Buka", border=1, link=row['Link Maps'], align='C')
         pdf.ln()
-        i += 1
+        
     return pdf.output(dest='S').encode('latin-1')
 
 # --- FUNGSI MAPS ---
@@ -100,31 +105,23 @@ if st.session_state['data_storage']:
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
         if st.button("Jalankan Optimasi"):
-            with st.spinner('AI menghitung rute satu jalur...'):
-                # Gabungkan data
-                data_combined = []
-                for idx, row in df.iterrows():
-                    data_combined.append({'name': row[name_col], 'lat': row[lat_col], 'lon': row[lon_col]})
+            with st.spinner('AI membersihkan data & menghitung rute...'):
+                clean_df = df.drop_duplicates(subset=[lat_col, lon_col])
+                data_combined = clean_df[[name_col, lat_col, lon_col]].to_dict('records')
+                data_combined.sort(key=lambda x: (x[lat_col], x[lon_col]))
                 
-                # URUTKAN SECARA GEOGRAFIS (Satu Jalur)
-                # Mengurutkan berdasarkan Latitude & Longitude untuk membuat alur yang mengalir
-                data_combined.sort(key=lambda x: (x['lat'], x['lon']))
+                locations = [[x[lat_col], x[lon_col]] for x in data_combined]
+                names = [x[name_col] for x in data_combined]
                 
-                locations = [[x['lat'], x['lon']] for x in data_combined]
-                names = [x['name'] for x in data_combined]
-                
-                # OSRM Route
                 coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
                 url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
                 data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
                 matrix = data['durations']
                 
-                # Optimasi lokal dalam urutan yang sudah searah
                 route_indices, total_seconds = [0], 0
                 unvisited = list(range(1, len(locations)))
                 while unvisited:
                     curr = route_indices[-1]
-                    # Tetap mengambil terdekat, tapi karena sudah diurutkan spasial, salesman tidak akan loncat jauh
                     best = min(unvisited, key=lambda x: matrix[curr][x])
                     total_seconds += matrix[curr][best]
                     route_indices.append(best)
