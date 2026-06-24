@@ -4,3 +4,4 @@ requests
 folium
 ortools
 openpyxl
+fpdf
