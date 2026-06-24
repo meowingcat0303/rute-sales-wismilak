@@ -5,16 +5,16 @@ from streamlit.components.v1 import html
 
 # --- FUNGSI PEMBANTU ---
 def get_single_maps_link(lat, lon):
-    # Link langsung ke titik koordinat
-    return f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+    return f"https://www.google.com/maps/dir/?api=1&destination={lat},{lon}"
 
 def get_gmaps_link(lat1, lon1, lat2, lon2):
-    return f"https://www.google.com/maps/dir/?api=1&origin={lat1},{lon1}&destination={lat2},{lon2}&travelmode=driving"
+    return f"https://www.google.com/maps/dir/{lat1},{lon1}/{lat2},{lon2}"
 
+# FUNGSI DIPERBAIKI: Menggabungkan 10 koordinat menjadi satu rute Google Maps
 def get_batch_gmaps_link(locations_list):
-    # Rute batch 10 toko
-    lat, lon = locations_list[0]
-    return f"https://www.google.com/maps/dir/?api=1&destination={lat},{lon}&travelmode=driving"
+    # Format: https://www.google.com/maps/dir/lat1,lon1/lat2,lon2/.../lat10,lon10
+    path = "/".join([f"{loc[0]},{loc[1]}" for loc in locations_list])
+    return f"https://www.google.com/maps/dir/{path}"
 
 def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
     url = f"http://router.project-osrm.org/route/v1/driving/{start_lon},{start_lat};{end_lon},{end_lat}?overview=full&geometries=geojson"
@@ -53,13 +53,11 @@ if uploaded_file:
         with c3:
             lon_col = st.selectbox("Pilih kolom Longitude:", cols, index=cols.index(find_best_col(['long', 'lng', 'longitude'])))
 
-    # --- TAB A: RAW KOORDINAT (NON-OPTIMIZED) ---
+    # --- TABS ---
     tab1, tab2 = st.tabs(["📂 Mode A: Link Koordinat (Raw/Urut)", "🚀 Mode B: Optimasi Rute (Hybrid AI)"])
 
     with tab1:
         st.subheader("Mode: Koordinat Murni")
-        st.write("Data ditampilkan sesuai urutan file Excel. Tidak ada optimasi rute.")
-        
         raw_data = df.copy()
         raw_data['Google Maps Link'] = raw_data.apply(lambda row: get_single_maps_link(row[lat_col], row[lon_col]), axis=1)
         
@@ -71,52 +69,43 @@ if uploaded_file:
             use_container_width=True
         )
 
-    # --- TAB B: OPTIMASI RUTE (HYBRID AI) ---
     with tab2:
         st.subheader("Mode: Optimasi Rute")
         if st.button("Jalankan Optimasi Rute"):
-            with st.spinner('AI sedang menganalisis rute paling efisien...'):
+            with st.spinner('AI sedang menganalisis rute...'):
                 locations = df[[lat_col, lon_col]].values.tolist()
                 names = df[name_col].tolist()
 
-                # Hitung Matriks Durasi
+                # Hitung Matriks
                 coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
                 url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
                 matrix = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()['durations']
 
-                # Logika Hybrid (Fleksibel)
+                # Optimasi (Nearest Neighbor)
                 current_node = 0 
                 unvisited = list(range(1, len(locations)))
                 route_indices = [0]
                 total_travel_seconds = 0
                 
                 while unvisited:
-                    best_node = None
-                    min_score = float('inf')
-                    for next_node in unvisited:
-                        score = matrix[current_node][next_node]
-                        if score < min_score:
-                            min_score = score
-                            best_node = next_node
-                    
+                    best_node = min(unvisited, key=lambda x: matrix[current_node][x])
                     total_travel_seconds += matrix[current_node][best_node]
                     route_indices.append(best_node)
                     unvisited.remove(best_node)
                     current_node = best_node
                 
-                total_travel_seconds += matrix[current_node][0]
                 route_indices.append(0)
 
-                # Tampilkan Hasil
+                # Tabel Hasil
                 table_data = []
                 for i in range(len(route_indices) - 1):
                     curr = route_indices[i]
                     next_n = route_indices[i+1]
                     dur_sec = round(matrix[curr][next_n])
                     
-                    # Batching
-                    end_batch = min(i + 10, len(route_indices) - 1)
-                    batch_locations = [locations[route_indices[idx]] for idx in range(i, end_batch + 1)]
+                    # Batching: Ambil 10 toko kedepan (termasuk dirinya sendiri)
+                    end_idx = min(i + 10, len(route_indices))
+                    batch_locations = [locations[route_indices[idx]] for idx in range(i, end_idx)]
                     
                     table_data.append({
                         "Checklist": False,
@@ -125,7 +114,7 @@ if uploaded_file:
                         "Ke": names[next_n],
                         "Waktu (Menit)": round(dur_sec / 60, 2),
                         "Link Maps": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
-                        "Link 10 Toko": get_batch_gmaps_link(batch_locations)
+                        "Rute 10 toko kedepan": get_batch_gmaps_link(batch_locations)
                     })
 
                 st.data_editor(
@@ -133,10 +122,8 @@ if uploaded_file:
                     column_config={
                         "Checklist": st.column_config.CheckboxColumn("Checklist", default=False),
                         "Link Maps": st.column_config.LinkColumn("Navigasi", display_text="📍 Navigasi"),
-                        "Link 10 Toko": st.column_config.LinkColumn("Batch", display_text="🚀 Batch 10")
+                        "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute 10 Toko")
                     },
                     use_container_width=True,
                     hide_index=True
                 )
-                
-                st.metric("Total Estimasi", f"{int(total_travel_seconds//3600)} Jam {int((total_travel_seconds%3600)//60)} Menit")
