@@ -32,7 +32,16 @@ def generate_pdf(df):
         i += 1
     return pdf.output(dest='S').encode('latin-1')
 
-# --- FUNGSI MAPS ---
+# --- FUNGSI MAPS & ROUTING ---
+def get_road_geometry(lat1, lon1, lat2, lon2):
+    url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
+    try:
+        res = requests.get(url).json()
+        coords = res['routes'][0]['geometry']['coordinates']
+        return [[c[1], c[0]] for c in coords]
+    except:
+        return [[lat1, lon1], [lat2, lon2]]
+
 def get_single_leg_link(lat1, lon1, lat2, lon2):
     return f"https://www.google.com/maps/dir/?api=1&origin={lat1},{lon1}&destination={lat2},{lon2}&travelmode=driving"
 
@@ -69,7 +78,6 @@ if st.session_state['data_storage']:
         st.subheader("Mode A: List Koordinat")
         has_kode = kode_col != "Tidak Ada"
         cols_to_use = [kode_col, name_col, lat_col, lon_col] if has_kode else [name_col, lat_col, lon_col]
-        
         raw_data = df[cols_to_use].copy()
         raw_data['Link Maps'] = df.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
         raw_data.insert(0, "No", range(1, 1 + len(raw_data)))
@@ -79,7 +87,6 @@ if st.session_state['data_storage']:
         c1, c2 = st.columns(2)
         pdf_bytes = generate_pdf(raw_data)
         c1.download_button("📥 Download PDF", pdf_bytes, "Daftar_Toko.pdf", "application/pdf")
-        
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
             raw_data.to_excel(writer, index=False)
@@ -101,16 +108,11 @@ if st.session_state['data_storage']:
                 data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
                 matrix = data['durations']
                 
-                # LOGIKA REALISTIS: Directional Greedy
-                # Memberi sedikit penalti jika toko berikutnya memaksa rute balik arah (sederhana)
                 route_indices, total_seconds = [0], 0
                 unvisited = list(range(1, len(locations)))
-                
                 while unvisited:
-                    curr = route_indices[-1]
-                    # Cari tetangga terdekat dengan penalti ringan jika rute makin jauh dari titik start (menghindari "ping-pong")
-                    best = min(unvisited, key=lambda x: matrix[curr][x] + (0.1 * matrix[0][x]))
-                    total_seconds += matrix[curr][best]
+                    best = min(unvisited, key=lambda x: matrix[route_indices[-1]][x] + (0.1 * matrix[0][x]))
+                    total_seconds += matrix[route_indices[-1]][best]
                     route_indices.append(best)
                     unvisited.remove(best)
                 route_indices.append(0)
@@ -139,9 +141,13 @@ if st.session_state['data_storage']:
                 
                 st.metric("Total Waktu", f"{int(total_seconds//3600)} Jam {int((total_seconds%3600)//60)} Menit")
                 
+                # MAP REALISTIS (Mode B)
                 m_b = folium.Map(location=locations[0], zoom_start=15)
                 for i in range(len(route_indices) - 1):
-                    folium.PolyLine([locations[route_indices[i]], locations[route_indices[i+1]]], color="blue", weight=5).add_to(m_b)
+                    # Mengambil jalur jalan sesungguhnya
+                    path = get_road_geometry(locations[route_indices[i]][0], locations[route_indices[i]][1], 
+                                             locations[route_indices[i+1]][0], locations[route_indices[i+1]][1])
+                    folium.PolyLine(path, color="blue", weight=5).add_to(m_b)
                 for i, node in enumerate(route_indices):
                     folium.Marker(locations[node], popup=names[node]).add_to(m_b)
                 html(m_b._repr_html_(), height=400)
