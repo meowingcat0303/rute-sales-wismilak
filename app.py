@@ -4,7 +4,7 @@ import requests
 from fpdf import FPDF
 import io
 
-# --- FUNGSI PDF ---
+# --- FUNGSI PDF (DIPERBAIKI) ---
 def generate_pdf(df):
     pdf = FPDF()
     pdf.add_page()
@@ -21,20 +21,20 @@ def generate_pdf(df):
     pdf.cell(40, 10, "Link Maps", border=1, fill=True)
     pdf.ln()
     
-    # Isi
+    # Isi (Menggunakan .iloc untuk mencegah KeyError)
     for _, row in df.iterrows():
-        pdf.cell(50, 10, str(row[0])[:25], border=1)
-        pdf.cell(30, 10, str(row[1]), border=1)
-        pdf.cell(30, 10, str(row[2]), border=1)
+        pdf.cell(50, 10, str(row.iloc[0])[:25], border=1)
+        pdf.cell(30, 10, str(row.iloc[1]), border=1)
+        pdf.cell(30, 10, str(row.iloc[2]), border=1)
         pdf.set_text_color(0, 0, 255)
-        pdf.cell(40, 10, "Klik Disini", border=1, link=str(row[3]))
+        pdf.cell(40, 10, "Klik Disini", border=1, link=str(row.iloc[3]))
         pdf.set_text_color(0, 0, 0)
         pdf.ln()
     return pdf.output(dest='S').encode('latin-1')
 
 # --- FUNGSI MAPS ---
 def get_single_maps_link(lat, lon):
-    return f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+    return f"https://www.google.com/maps/dir/?api=1&destination={lat},{lon}"
 
 def get_gmaps_link(lat1, lon1, lat2, lon2):
     return f"https://www.google.com/maps/dir/?api=1&origin={lat1},{lon1}&destination={lat2},{lon2}&travelmode=driving"
@@ -48,22 +48,18 @@ def get_batch_gmaps_link(locations_list):
 st.set_page_config(layout="wide", page_title="Wismilak Optimizer")
 st.title("📍 Wismilak Route Optimizer")
 
-# Session Storage (Data tetap ada selama tab browser terbuka)
 if 'data_storage' not in st.session_state:
     st.session_state['data_storage'] = {}
 
-# Upload File
 uploaded_file = st.file_uploader("Upload File Excel (.xlsx)", type=["xlsx"])
 if uploaded_file:
     df_temp = pd.read_excel(uploaded_file)
     st.session_state['data_storage'][uploaded_file.name] = df_temp
 
-# Sidebar File Picker
 if st.session_state['data_storage']:
     selected_file = st.sidebar.selectbox("Pilih Data Tersimpan:", list(st.session_state['data_storage'].keys()))
     df = st.session_state['data_storage'][selected_file]
     
-    # Auto Detect
     cols = df.columns.tolist()
     name_col = st.selectbox("Kolom Nama:", cols, index=cols.index([c for c in cols if 'nama' in c.lower() or 'toko' in c.lower()][0] if any('nama' in c.lower() or 'toko' in c.lower() for c in cols) else cols[0]))
     lat_col = st.selectbox("Kolom Lat:", cols, index=cols.index([c for c in cols if 'lat' in c.lower()][0] if any('lat' in c.lower() for c in cols) else cols[1]))
@@ -89,7 +85,6 @@ if st.session_state['data_storage']:
                 url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
                 matrix = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()['durations']
 
-                # Nearest Neighbor
                 current_node, unvisited = 0, list(range(1, len(locations)))
                 route_indices, total_seconds = [0], 0
                 while unvisited:
