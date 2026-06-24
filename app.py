@@ -6,7 +6,7 @@ import io
 import folium
 from streamlit.components.v1 import html
 
-# --- FUNGSI PDF (DIPERBAIKI) ---
+# --- FUNGSI PDF (Warna Biru untuk Link) ---
 def generate_pdf(df):
     pdf = FPDF()
     pdf.add_page()
@@ -19,7 +19,6 @@ def generate_pdf(df):
     cols = df.columns.tolist()
     # Header
     pdf.cell(10, 10, "No", border=1, fill=True)
-    # Header Dinamis (semua kolom kecuali No dan Link Maps)
     for c in cols[1:-1]:
         pdf.cell(35, 10, str(c), border=1, fill=True)
     pdf.cell(20, 10, "Maps", border=1, fill=True)
@@ -31,8 +30,10 @@ def generate_pdf(df):
         for c in cols[1:-1]:
             pdf.cell(35, 10, str(row[c])[:20], border=1)
         
-        # Link Maps yang bisa diklik
+        # Link Maps dibuat Biru agar terlihat seperti link
+        pdf.set_text_color(0, 0, 255)
         pdf.cell(20, 10, "Buka", border=1, link=row['Link Maps'], align='C')
+        pdf.set_text_color(0, 0, 0) # Reset ke hitam
         pdf.ln()
         
     return pdf.output(dest='S').encode('latin-1')
@@ -83,6 +84,7 @@ if st.session_state['data_storage']:
         st.subheader("Mode A: List Koordinat")
         has_kode = kode_col != "Tidak Ada"
         cols_to_use = [kode_col, name_col, lat_col, lon_col] if has_kode else [name_col, lat_col, lon_col]
+        
         raw_data = df[cols_to_use].copy()
         raw_data['Link Maps'] = df.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
         raw_data.insert(0, "No", range(1, 1 + len(raw_data)))
@@ -92,6 +94,7 @@ if st.session_state['data_storage']:
         c1, c2 = st.columns(2)
         pdf_bytes = generate_pdf(raw_data)
         c1.download_button("📥 Download PDF", pdf_bytes, "Daftar_Toko.pdf", "application/pdf")
+        
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
             raw_data.to_excel(writer, index=False)
