@@ -15,23 +15,21 @@ def generate_pdf(df):
     pdf.set_font("Arial", size=10)
     pdf.ln(5)
     pdf.set_fill_color(200, 200, 200)
-    # Header menyesuaikan urutan kolom yang ada
-    cols = df.columns.tolist()
-    for col in cols:
-        pdf.cell(30, 10, col, border=1, fill=True)
+    pdf.cell(10, 10, "No", border=1, fill=True)
+    pdf.cell(30, 10, "Kode", border=1, fill=True)
+    pdf.cell(50, 10, "Nama Toko", border=1, fill=True)
+    pdf.cell(25, 10, "Lat", border=1, fill=True)
+    pdf.cell(25, 10, "Long", border=1, fill=True)
     pdf.ln()
-    
-    # Isi
+    i = 1
     for _, row in df.iterrows():
-        for i in range(len(row)):
-            # Jika kolom adalah Link Maps, buat link clickable
-            if "Link" in cols[i] or "Navigasi" in cols[i]:
-                pdf.set_text_color(0, 0, 255)
-                pdf.cell(30, 10, "Klik", border=1, link=str(row.iloc[i]))
-                pdf.set_text_color(0, 0, 0)
-            else:
-                pdf.cell(30, 10, str(row.iloc[i])[:15], border=1)
+        pdf.cell(10, 10, str(i), border=1)
+        pdf.cell(30, 10, str(row.iloc[0]), border=1)
+        pdf.cell(50, 10, str(row.iloc[1])[:25], border=1)
+        pdf.cell(25, 10, str(row.iloc[2]), border=1)
+        pdf.cell(25, 10, str(row.iloc[3]), border=1)
         pdf.ln()
+        i += 1
     return pdf.output(dest='S').encode('latin-1')
 
 # --- FUNGSI MAPS ---
@@ -72,19 +70,19 @@ if st.session_state['data_storage']:
         has_kode = kode_col != "Tidak Ada"
         cols_to_use = [kode_col, name_col, lat_col, lon_col] if has_kode else [name_col, lat_col, lon_col]
         
-        df_export = df[cols_to_use].copy()
-        df_export['Link Maps'] = df.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
-        df_export.insert(0, "No", range(1, 1 + len(df_export)))
+        raw_data = df[cols_to_use].copy()
+        raw_data['Link Maps'] = df.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
+        raw_data.insert(0, "No", range(1, 1 + len(raw_data)))
         
-        st.data_editor(df_export, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
+        st.data_editor(raw_data, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
         
         c1, c2 = st.columns(2)
-        pdf_bytes = generate_pdf(df_export)
+        pdf_bytes = generate_pdf(raw_data)
         c1.download_button("📥 Download PDF", pdf_bytes, "Daftar_Toko.pdf", "application/pdf")
         
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-            df_export.to_excel(writer, index=False)
+            raw_data.to_excel(writer, index=False)
         c2.download_button("📥 Download Excel", excel_buffer.getvalue(), "Daftar_Toko.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         
         m_a = folium.Map(location=[df[lat_col].mean(), df[lon_col].mean()], zoom_start=13)
@@ -95,19 +93,24 @@ if st.session_state['data_storage']:
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
         if st.button("Jalankan Optimasi"):
-            with st.spinner('AI menghitung rute...'):
+            with st.spinner('AI menghitung rute realistis...'):
                 locations = df[[lat_col, lon_col]].values.tolist()
                 names = df[name_col].tolist()
                 coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
                 url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
                 data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
-                matrix, distances = data['durations'], data['distances']
+                matrix = data['durations']
                 
+                # LOGIKA REALISTIS: Directional Greedy
+                # Memberi sedikit penalti jika toko berikutnya memaksa rute balik arah (sederhana)
                 route_indices, total_seconds = [0], 0
                 unvisited = list(range(1, len(locations)))
+                
                 while unvisited:
-                    best = min(unvisited, key=lambda x: matrix[route_indices[-1]][x])
-                    total_seconds += matrix[route_indices[-1]][best]
+                    curr = route_indices[-1]
+                    # Cari tetangga terdekat dengan penalti ringan jika rute makin jauh dari titik start (menghindari "ping-pong")
+                    best = min(unvisited, key=lambda x: matrix[curr][x] + (0.1 * matrix[0][x]))
+                    total_seconds += matrix[curr][best]
                     route_indices.append(best)
                     unvisited.remove(best)
                 route_indices.append(0)
