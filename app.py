@@ -58,7 +58,7 @@ def get_batch_gmaps_link(locations_list):
 
 # --- UI APP ---
 st.set_page_config(layout="wide", page_title="Wismilak Optimizer")
-st.title("📍 Wismilak Route Optimizer")
+st.title("📍 Wismilak Route Optimizer (developed by Ghalib Damarillah Asahlintang)")
 
 if 'data_storage' not in st.session_state:
     st.session_state['data_storage'] = {}
