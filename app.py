@@ -4,13 +4,14 @@ import requests, folium
 from streamlit.components.v1 import html
 
 # --- FUNGSI PEMBANTU ---
+# Menggunakan format resmi Google Maps URL untuk rute langsung
 def get_gmaps_link(lat1, lon1, lat2, lon2):
     return f"https://www.google.com/maps/dir/?api=1&origin={lat1},{lon1}&destination={lat2},{lon2}&travelmode=driving"
 
 def get_batch_gmaps_link(locations_list):
-    base_url = "https://www.google.com/maps/dir/"
-    coords_path = "/".join([f"{loc[0]},{loc[1]}" for loc in locations_list])
-    return base_url + coords_path
+    # Untuk rute batch, kita buat link ke titik pertama
+    lat, lon = locations_list[0]
+    return f"https://www.google.com/maps/dir/?api=1&destination={lat},{lon}&travelmode=driving"
 
 def get_road_geometry(start_lat, start_lon, end_lat, end_lon):
     url = f"http://router.project-osrm.org/route/v1/driving/{start_lon},{start_lat};{end_lon},{end_lat}?overview=full&geometries=geojson"
@@ -55,7 +56,6 @@ if uploaded_file:
         locations = df[[lat_col, lon_col]].values.tolist()
         names = df[name_col].tolist()
 
-        # Hitung Matriks Durasi
         coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
         url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
         matrix = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()['durations']
@@ -92,18 +92,14 @@ if uploaded_file:
         next_n = route_indices[i+1]
         
         dur_sec = round(matrix[curr][next_n])
-        end_batch = min(i + 10, len(route_indices) - 1)
-        batch_locations = [locations[route_indices[idx]] for idx in range(i, end_batch + 1)]
         
         table_data.append({
             "Checklist": False,
             "No": i + 1,
             "Dari": names[curr],
             "Ke": names[next_n],
-            "Waktu (Detik)": dur_sec,
             "Waktu (Menit)": round(dur_sec / 60, 2),
-            "Link Perjalanan (1 Toko)": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
-            "Link 10 Toko Kedepan": get_batch_gmaps_link(batch_locations)
+            "Link Maps": get_gmaps_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1])
         })
 
     st.write("### Jadwal Kunjungan:")
@@ -111,8 +107,7 @@ if uploaded_file:
         pd.DataFrame(table_data),
         column_config={
             "Checklist": st.column_config.CheckboxColumn("Checklist", default=False),
-            "Link Perjalanan (1 Toko)": st.column_config.LinkColumn(display_text="Buka A->B"),
-            "Link 10 Toko Kedepan": st.column_config.LinkColumn(display_text="Buka Rute Batch")
+            "Link Maps": st.column_config.LinkColumn("Buka Google Maps", display_text="📍 Navigasi"),
         },
         use_container_width=True,
         hide_index=True
