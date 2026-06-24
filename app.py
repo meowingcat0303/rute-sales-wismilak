@@ -15,21 +15,23 @@ def generate_pdf(df):
     pdf.set_font("Arial", size=10)
     pdf.ln(5)
     pdf.set_fill_color(200, 200, 200)
-    pdf.cell(10, 10, "No", border=1, fill=True)
-    pdf.cell(30, 10, "Kode", border=1, fill=True)
-    pdf.cell(50, 10, "Nama Toko", border=1, fill=True)
-    pdf.cell(25, 10, "Lat", border=1, fill=True)
-    pdf.cell(25, 10, "Long", border=1, fill=True)
+    # Header menyesuaikan urutan kolom yang ada
+    cols = df.columns.tolist()
+    for col in cols:
+        pdf.cell(30, 10, col, border=1, fill=True)
     pdf.ln()
-    i = 1
+    
+    # Isi
     for _, row in df.iterrows():
-        pdf.cell(10, 10, str(i), border=1)
-        pdf.cell(30, 10, str(row.iloc[0]), border=1)
-        pdf.cell(50, 10, str(row.iloc[1])[:25], border=1)
-        pdf.cell(25, 10, str(row.iloc[2]), border=1)
-        pdf.cell(25, 10, str(row.iloc[3]), border=1)
+        for i in range(len(row)):
+            # Jika kolom adalah Link Maps, buat link clickable
+            if "Link" in cols[i] or "Navigasi" in cols[i]:
+                pdf.set_text_color(0, 0, 255)
+                pdf.cell(30, 10, "Klik", border=1, link=str(row.iloc[i]))
+                pdf.set_text_color(0, 0, 0)
+            else:
+                pdf.cell(30, 10, str(row.iloc[i])[:15], border=1)
         pdf.ln()
-        i += 1
     return pdf.output(dest='S').encode('latin-1')
 
 # --- FUNGSI MAPS ---
@@ -70,10 +72,8 @@ if st.session_state['data_storage']:
         has_kode = kode_col != "Tidak Ada"
         cols_to_use = [kode_col, name_col, lat_col, lon_col] if has_kode else [name_col, lat_col, lon_col]
         
-        raw_data = df[cols_to_use].copy()
-        raw_data['Link Maps'] = df.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
-        # Tambahkan nomor urut hanya untuk tampilan data_editor dan download
-        df_export = raw_data.copy()
+        df_export = df[cols_to_use].copy()
+        df_export['Link Maps'] = df.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
         df_export.insert(0, "No", range(1, 1 + len(df_export)))
         
         st.data_editor(df_export, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
