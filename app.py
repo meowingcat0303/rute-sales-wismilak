@@ -6,7 +6,10 @@ import io
 import folium
 from streamlit.components.v1 import html
 
-# --- FUNGSI PDF (Warna Biru untuk Link) ---
+# URL Master Anda (Sudah hardcoded)
+MASTER_SHEET_URL = "https://docs.google.com/spreadsheets/d/11BXZ5Wt8AvuDwI0x1taxdlnNIgd4Grc9/export?format=csv"
+
+# --- FUNGSI PDF ---
 def generate_pdf(df):
     pdf = FPDF()
     pdf.add_page()
@@ -15,27 +18,20 @@ def generate_pdf(df):
     pdf.set_font("Arial", size=10)
     pdf.ln(5)
     pdf.set_fill_color(200, 200, 200)
-    
     cols = df.columns.tolist()
-    # Header
     pdf.cell(10, 10, "No", border=1, fill=True)
     for c in cols[1:-1]:
         pdf.cell(35, 10, str(c), border=1, fill=True)
     pdf.cell(20, 10, "Maps", border=1, fill=True)
     pdf.ln()
-    
-    # Isi
     for _, row in df.iterrows():
         pdf.cell(10, 10, str(row['No']), border=1)
         for c in cols[1:-1]:
             pdf.cell(35, 10, str(row[c])[:20], border=1)
-        
-        # Link Maps dibuat Biru agar terlihat seperti link
         pdf.set_text_color(0, 0, 255)
         pdf.cell(20, 10, "Buka", border=1, link=row['Link Maps'], align='C')
-        pdf.set_text_color(0, 0, 0) # Reset ke hitam
+        pdf.set_text_color(0, 0, 0)
         pdf.ln()
-        
     return pdf.output(dest='S').encode('latin-1')
 
 # --- FUNGSI MAPS ---
@@ -58,22 +54,30 @@ def get_batch_gmaps_link(locations_list):
 
 # --- UI APP ---
 st.set_page_config(layout="wide", page_title="Wismilak Optimizer")
-st.title("📍 Wismilak Route Optimizer (developed by Ghalib Damarillah Asahlintang)")
+st.title("📍 Wismilak Route Optimizer")
 
 if 'data_storage' not in st.session_state:
     st.session_state['data_storage'] = {}
 
-uploaded_file = st.file_uploader("Upload File Excel (.xlsx)", type=["xlsx"])
-if uploaded_file:
-    st.session_state['data_storage'][uploaded_file.name] = pd.read_excel(uploaded_file)
+# Pilihan Sumber Data
+source = st.sidebar.radio("Sumber Data:", ["Upload Excel", "Google Sheets Master"])
+df = None
 
-if st.session_state['data_storage']:
-    selected_file = st.sidebar.selectbox("Pilih Data:", list(st.session_state['data_storage'].keys()))
-    df = st.session_state['data_storage'][selected_file]
+if source == "Upload Excel":
+    uploaded_file = st.file_uploader("Upload File Excel (.xlsx)", type=["xlsx"])
+    if uploaded_file:
+        df = pd.read_excel(uploaded_file)
+else:
+    try:
+        df = pd.read_csv(MASTER_SHEET_URL)
+        st.sidebar.success("Master Data Terhubung!")
+    except:
+        st.sidebar.error("Gagal terhubung ke Google Sheet. Pastikan link sudah Public.")
+
+if df is not None:
     cols = df.columns.tolist()
-    
     kode_opt = ["Tidak Ada"] + cols
-    kode_col = st.selectbox("Kolom Kode Toko (Opsional):", kode_opt)
+    kode_col = st.selectbox("Kolom Kode Toko (Wajib untuk Pencarian):", kode_opt)
     name_col = st.selectbox("Kolom Nama:", cols, index=cols.index([c for c in cols if 'nama' in c.lower() or 'toko' in c.lower()][0] if any('nama' in c.lower() or 'toko' in c.lower() for c in cols) else cols[0]))
     lat_col = st.selectbox("Kolom Lat:", cols, index=cols.index([c for c in cols if 'lat' in c.lower()][0] if any('lat' in c.lower() for c in cols) else cols[1] if len(cols)>1 else cols[0]))
     lon_col = st.selectbox("Kolom Long:", cols, index=cols.index([c for c in cols if 'long' in c.lower() or 'lng' in c.lower()][0] if any('long' in c.lower() or 'lng' in c.lower() for c in cols) else cols[2] if len(cols)>2 else cols[0]))
@@ -92,23 +96,29 @@ if st.session_state['data_storage']:
         st.data_editor(raw_data, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
         
         c1, c2 = st.columns(2)
-        pdf_bytes = generate_pdf(raw_data)
-        c1.download_button("📥 Download PDF", pdf_bytes, "Daftar_Toko.pdf", "application/pdf")
+        c1.download_button("📥 Download PDF", generate_pdf(raw_data), "Daftar_Toko.pdf", "application/pdf")
         
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
             raw_data.to_excel(writer, index=False)
         c2.download_button("📥 Download Excel", excel_buffer.getvalue(), "Daftar_Toko.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         
-        m_a = folium.Map(location=[df[lat_col].mean(), df[lon_col].mean()], zoom_start=13)
-        for _, row in df.iterrows():
-            folium.Marker([row[lat_col], row[lon_col]], popup=row[name_col]).add_to(m_a)
-        html(m_a._repr_html_(), height=400)
+        # PENCARIAN CEPAT
+        if has_kode:
+            st.markdown("---")
+            st.subheader("🔍 Generate Link via Kode Toko")
+            input_codes = st.text_area("Masukkan Kode Toko (Enter per kode):")
+            if st.button("Generate"):
+                list_kode = [x.strip() for x in input_codes.split('\n') if x.strip()]
+                filtered = df[df[kode_col].astype(str).isin(list_kode)].copy()
+                filtered['Link Maps'] = filtered.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
+                filtered.insert(0, "No", range(1, 1 + len(filtered)))
+                st.data_editor(filtered, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
 
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
         if st.button("Jalankan Optimasi"):
-            with st.spinner('AI membersihkan data & menghitung rute...'):
+            with st.spinner('Menghitung Rute...'):
                 clean_df = df.drop_duplicates(subset=[lat_col, lon_col])
                 data_combined = clean_df[[name_col, lat_col, lon_col]].to_dict('records')
                 data_combined.sort(key=lambda x: (x[lat_col], x[lon_col]))
@@ -135,31 +145,12 @@ if st.session_state['data_storage']:
                 for i in range(len(route_indices) - 1):
                     curr, next_n = route_indices[i], route_indices[i+1]
                     batch_locs = [locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))]
-                    
                     table_data.append({
-                        "Checklist": False,
-                        "No": i + 1,
-                        "Dari": names[curr],
-                        "Ke": names[next_n],
+                        "Checklist": False, "No": i + 1, "Dari": names[curr], "Ke": names[next_n],
                         "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2),
                         "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
                         "Rute 10 toko kedepan": get_batch_gmaps_link(batch_locs)
                     })
                 
-                st.data_editor(pd.DataFrame(table_data), 
-                               column_config={
-                                   "Navigasi A->B": st.column_config.LinkColumn("Navigasi A->B", display_text="🗺️ Cek Jarak/Rute"),
-                                   "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")
-                               }, 
-                               use_container_width=True, hide_index=True)
-                
+                st.data_editor(pd.DataFrame(table_data), column_config={"Navigasi A->B": st.column_config.LinkColumn("Navigasi", display_text="🗺️ Cek Rute"), "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")}, use_container_width=True, hide_index=True)
                 st.metric("Total Waktu", f"{int(total_seconds//3600)} Jam {int((total_seconds%3600)//60)} Menit")
-                
-                m_b = folium.Map(location=locations[0], zoom_start=15)
-                for i in range(len(route_indices) - 1):
-                    path = get_road_geometry(locations[route_indices[i]][0], locations[route_indices[i]][1], 
-                                             locations[route_indices[i+1]][0], locations[route_indices[i+1]][1])
-                    folium.PolyLine(path, color="blue", weight=5).add_to(m_b)
-                for i, node in enumerate(route_indices):
-                    folium.Marker(locations[node], popup=names[node]).add_to(m_b)
-                html(m_b._repr_html_(), height=400)
