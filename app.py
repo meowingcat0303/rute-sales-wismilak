@@ -56,7 +56,7 @@ def get_batch_gmaps_link(locations_list):
 
 # --- UI APP ---
 st.set_page_config(layout="wide", page_title="Wismilak Optimizer")
-st.title("📍 Wismilak Route Optimizer (developed by Ghalib Damarillah Asahlintang)")
+st.title("📍 Wismilak Route Optimizer")
 
 # --- SUMBER DATA ---
 st.sidebar.subheader("⚙️ Sumber Data")
@@ -78,8 +78,10 @@ if df is not None:
     cols = df.columns.tolist()
     kode_opt = ["Tidak Ada"] + cols
     default_kode_idx = 0
+    
+    # PERBAIKAN: Menambahkan 'customer' ke dalam keyword deteksi otomatis
     for i, c in enumerate(cols):
-        if 'kode' in c.lower() or 'code' in c.lower():
+        if 'kode' in c.lower() or 'code' in c.lower() or 'customer' in c.lower():
             default_kode_idx = i + 1
             break
             
@@ -102,7 +104,6 @@ if df is not None:
         if source == "Google Sheets Master":
             st.subheader("🔍 Generate Link via Copas Kode Toko")
             if not has_kode:
-                # BAGIAN YANG DIUBAH: Penjelasan error dan cara mengatasi
                 st.warning("⚠️ Kolom yang berisi Kode Toko belum dipilih.")
                 st.info("💡 **Cara Mengatasi:** Silakan lihat menu di sebelah kiri (sidebar), cari pengaturan **'Kolom Kode Toko'**. Ubah pilihannya dari 'Tidak Ada' menjadi kolom yang memuat kode toko Anda (contohnya ubah ke: **'Nomor Customer'** atau nama kolom yang sesuai).")
             else:
