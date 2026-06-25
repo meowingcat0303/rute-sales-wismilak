@@ -93,17 +93,17 @@ if df is not None:
     lat_col = st.sidebar.selectbox("Kolom Lat:", cols, index=cols.index([c for c in cols if 'lat' in c.lower()][0] if any('lat' in c.lower() for c in cols) else cols[1] if len(cols)>1 else cols[0]))
     lon_col = st.sidebar.selectbox("Kolom Long:", cols, index=cols.index([c for c in cols if 'long' in c.lower() or 'lng' in c.lower()][0] if any('long' in c.lower() or 'lng' in c.lower() for c in cols) else cols[2] if len(cols)>2 else cols[0]))
 
-    # --- PERBAIKAN ERROR TYPERERROR (Konversi ke Angka) ---
+    # Konversi ke Angka agar tidak error saat diload di Map
     df[lat_col] = pd.to_numeric(df[lat_col], errors='coerce')
     df[lon_col] = pd.to_numeric(df[lon_col], errors='coerce')
-    df = df.dropna(subset=[lat_col, lon_col]) # Hapus baris yang koordinatnya kosong/rusak
+    df = df.dropna(subset=[lat_col, lon_col])
 
     tab1, tab2 = st.tabs(["📂 Mode A: Generate via Copas Kode", "🚀 Mode B: Optimasi Rute"])
 
     with tab1:
         has_kode = kode_col != "Tidak Ada"
         
-        # --- FITUR COPAS DITATUH DI PALING ATAS ---
+        # --- FITUR COPAS KODE ---
         st.subheader("🔍 Generate Link via Copas Kode Toko")
         if not has_kode:
             st.warning("⚠️ Pilih 'Kolom Kode Toko' di sidebar kiri untuk menggunakan fitur ini.")
@@ -112,7 +112,10 @@ if df is not None:
             if st.button("Generate Link"):
                 if input_codes:
                     list_kode = [x.strip() for x in input_codes.split('\n') if x.strip()]
-                    master_indexed = df.set_index(kode_col.astype(str))
+                    
+                    # PERBAIKAN ERROR DI SINI: Pastikan data kolom diubah jadi string dulu, baru dijadikan index
+                    df[kode_col] = df[kode_col].astype(str)
+                    master_indexed = df.set_index(kode_col)
                     
                     valid_kodes = [k for k in list_kode if k in master_indexed.index]
                     invalid_kodes = [k for k in list_kode if k not in master_indexed.index]
@@ -121,7 +124,6 @@ if df is not None:
                         st.warning(f"Kode tidak ada di master data: {', '.join(invalid_kodes)}")
 
                     if valid_kodes:
-                        # Ambil data sesuai urutan copas
                         filtered_df = master_indexed.loc[valid_kodes].reset_index()
                         filtered_df = filtered_df.rename(columns={'index': kode_col})
                         
@@ -142,7 +144,7 @@ if df is not None:
 
         st.markdown("---")
         
-        # --- DATABASE KESELURUHAN (DI BAWAH) ---
+        # --- DATABASE KESELURUHAN ---
         st.subheader("Database Koordinat Keseluruhan")
         cols_to_use = [kode_col, name_col, lat_col, lon_col] if has_kode else [name_col, lat_col, lon_col]
         df_display = df[cols_to_use].copy()
@@ -162,7 +164,6 @@ if df is not None:
                     df_display.to_excel(writer, index=False)
                 c2.download_button("📥 Download Excel (Semua)", excel_buffer.getvalue(), "Daftar_Toko_All.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 
-                # Peta (Sudah aman dari error TypeError)
                 m_a = folium.Map(location=[df_display[lat_col].mean(), df_display[lon_col].mean()], zoom_start=13)
                 for _, row in df_display.iterrows():
                     folium.Marker([row[lat_col], row[lon_col]], popup=row[name_col]).add_to(m_a)
