@@ -80,7 +80,7 @@ else:
 if df is not None:
     cols = df.columns.tolist()
     
-    # Deteksi otomatis kolom kode agar tidak tersembunyi lagi
+    # Deteksi otomatis kolom kode
     kode_opt = ["Tidak Ada"] + cols
     default_kode_idx = 0
     for i, c in enumerate(cols):
@@ -93,42 +93,22 @@ if df is not None:
     lat_col = st.sidebar.selectbox("Kolom Lat:", cols, index=cols.index([c for c in cols if 'lat' in c.lower()][0] if any('lat' in c.lower() for c in cols) else cols[1] if len(cols)>1 else cols[0]))
     lon_col = st.sidebar.selectbox("Kolom Long:", cols, index=cols.index([c for c in cols if 'long' in c.lower() or 'lng' in c.lower()][0] if any('long' in c.lower() or 'lng' in c.lower() for c in cols) else cols[2] if len(cols)>2 else cols[0]))
 
-    tab1, tab2 = st.tabs(["📂 Mode A: List Koordinat & Copas", "🚀 Mode B: Optimasi Rute"])
+    # --- PERBAIKAN ERROR TYPERERROR (Konversi ke Angka) ---
+    df[lat_col] = pd.to_numeric(df[lat_col], errors='coerce')
+    df[lon_col] = pd.to_numeric(df[lon_col], errors='coerce')
+    df = df.dropna(subset=[lat_col, lon_col]) # Hapus baris yang koordinatnya kosong/rusak
+
+    tab1, tab2 = st.tabs(["📂 Mode A: Generate via Copas Kode", "🚀 Mode B: Optimasi Rute"])
 
     with tab1:
-        st.subheader("Mode A: List Koordinat (Database)")
         has_kode = kode_col != "Tidak Ada"
         
-        # Tampilkan Data Database Default
-        cols_to_use = [kode_col, name_col, lat_col, lon_col] if has_kode else [name_col, lat_col, lon_col]
-        df_display = df[cols_to_use].copy()
-        
-        df_display['Link Maps'] = df_display.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
-        df_display.insert(0, "No", range(1, 1 + len(df_display)))
-        
-        st.data_editor(df_display, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
-        
-        c1, c2 = st.columns(2)
-        c1.download_button("📥 Download PDF (Semua)", generate_pdf(df_display), "Daftar_Toko_All.pdf", "application/pdf")
-        
-        excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-            df_display.to_excel(writer, index=False)
-        c2.download_button("📥 Download Excel (Semua)", excel_buffer.getvalue(), "Daftar_Toko_All.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        
-        m_a = folium.Map(location=[df_display[lat_col].mean(), df_display[lon_col].mean()], zoom_start=13)
-        for _, row in df_display.iterrows():
-            folium.Marker([row[lat_col], row[lon_col]], popup=row[name_col]).add_to(m_a)
-        html(m_a._repr_html_(), height=400)
-
-        # --- FITUR COPAS (DIJAMIN MUNCUL TERUS) ---
-        st.markdown("---")
+        # --- FITUR COPAS DITATUH DI PALING ATAS ---
         st.subheader("🔍 Generate Link via Copas Kode Toko")
-        
         if not has_kode:
-            st.warning("⚠️ Untuk menggunakan fitur ini, pastikan Anda memilih 'Kolom Kode Toko' pada menu di sebelah kiri.")
+            st.warning("⚠️ Pilih 'Kolom Kode Toko' di sidebar kiri untuk menggunakan fitur ini.")
         else:
-            input_codes = st.text_area("Tempel (Paste) kode-kode toko di sini (Enter per baris) untuk memunculkan link Google Maps:")
+            input_codes = st.text_area("Tinggal input (paste) urutan kode toko di sini (Enter per baris) untuk generate link Google Maps:")
             if st.button("Generate Link"):
                 if input_codes:
                     list_kode = [x.strip() for x in input_codes.split('\n') if x.strip()]
@@ -138,9 +118,10 @@ if df is not None:
                     invalid_kodes = [k for k in list_kode if k not in master_indexed.index]
 
                     if invalid_kodes:
-                        st.warning(f"Kode berikut tidak ditemukan di database: {', '.join(invalid_kodes)}")
+                        st.warning(f"Kode tidak ada di master data: {', '.join(invalid_kodes)}")
 
                     if valid_kodes:
+                        # Ambil data sesuai urutan copas
                         filtered_df = master_indexed.loc[valid_kodes].reset_index()
                         filtered_df = filtered_df.rename(columns={'index': kode_col})
                         
@@ -158,6 +139,34 @@ if df is not None:
                         with pd.ExcelWriter(excel_buffer_f, engine='xlsxwriter') as writer:
                             filtered_df.to_excel(writer, index=False)
                         c4.download_button("📥 Download Excel (Hasil Copas)", excel_buffer_f.getvalue(), "Rute_Sales_Copas.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+        st.markdown("---")
+        
+        # --- DATABASE KESELURUHAN (DI BAWAH) ---
+        st.subheader("Database Koordinat Keseluruhan")
+        cols_to_use = [kode_col, name_col, lat_col, lon_col] if has_kode else [name_col, lat_col, lon_col]
+        df_display = df[cols_to_use].copy()
+        
+        if not df_display.empty:
+            df_display['Link Maps'] = df_display.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
+            df_display.insert(0, "No", range(1, 1 + len(df_display)))
+            
+            with st.expander("Lihat Seluruh Database & Peta"):
+                st.data_editor(df_display, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
+                
+                c1, c2 = st.columns(2)
+                c1.download_button("📥 Download PDF (Semua)", generate_pdf(df_display), "Daftar_Toko_All.pdf", "application/pdf")
+                
+                excel_buffer = io.BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+                    df_display.to_excel(writer, index=False)
+                c2.download_button("📥 Download Excel (Semua)", excel_buffer.getvalue(), "Daftar_Toko_All.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                
+                # Peta (Sudah aman dari error TypeError)
+                m_a = folium.Map(location=[df_display[lat_col].mean(), df_display[lon_col].mean()], zoom_start=13)
+                for _, row in df_display.iterrows():
+                    folium.Marker([row[lat_col], row[lon_col]], popup=row[name_col]).add_to(m_a)
+                html(m_a._repr_html_(), height=400)
 
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
