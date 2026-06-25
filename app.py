@@ -134,11 +134,11 @@ if df is not None:
                             st.data_editor(filtered_df, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
 
                             c3, c4 = st.columns(2)
-                            c3.download_button("📥 Download PDF", generate_pdf(filtered_df), "Rute_Sales_Copas.pdf", "application/pdf")
+                            c3.download_button("📥 Download PDF", generate_pdf(filtered_df), "Daftar_Link_Toko.pdf", "application/pdf")
                             excel_buffer_f = io.BytesIO()
                             with pd.ExcelWriter(excel_buffer_f, engine='xlsxwriter') as writer:
                                 filtered_df.to_excel(writer, index=False)
-                            c4.download_button("📥 Download Excel", excel_buffer_f.getvalue(), "Rute_Sales_Copas.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                            c4.download_button("📥 Download Excel", excel_buffer_f.getvalue(), "Daftar_Link_Toko.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             
             st.markdown("---")
             st.subheader("Database Master Keseluruhan")
