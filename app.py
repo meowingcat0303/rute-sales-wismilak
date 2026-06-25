@@ -79,10 +79,13 @@ if df is not None:
     kode_opt = ["Tidak Ada"] + cols
     default_kode_idx = 0
     
-    # PERBAIKAN: Menambahkan 'customer' ke dalam keyword deteksi otomatis
-    for i, c in enumerate(cols):
-        if 'kode' in c.lower() or 'code' in c.lower() or 'customer' in c.lower():
-            default_kode_idx = i + 1
+    # PERBAIKAN LOGIKA: Mencari kata 'customerno' terlebih dahulu agar diprioritaskan sebelum kata 'customer' umum
+    for target_keyword in ['customerno', 'kode', 'code', 'customer']:
+        for i, c in enumerate(cols):
+            if target_keyword in c.lower():
+                default_kode_idx = i + 1
+                break
+        if default_kode_idx != 0:
             break
             
     kode_col = st.sidebar.selectbox("Kolom Kode Toko:", kode_opt, index=default_kode_idx)
