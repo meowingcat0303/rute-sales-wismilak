@@ -56,7 +56,7 @@ def get_batch_gmaps_link(locations_list):
 
 # --- UI APP ---
 st.set_page_config(layout="wide", page_title="Wismilak Optimizer")
-st.title("📍 Wismilak Route Optimizer")
+st.title("📍 Wismilak Route Optimizer (developed by Ghalib Damarillah Asahlintang)")
 
 # --- SUMBER DATA ---
 st.sidebar.subheader("⚙️ Sumber Data")
@@ -184,7 +184,7 @@ if df is not None:
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
         if st.button("Jalankan Optimasi"):
-            with st.spinner('Menghitung Rute Realistis...'):
+            with st.spinner('Menghitung Rute Paling Efisien....'):
                 clean_df = df.drop_duplicates(subset=[lat_col, lon_col])
                 data_combined = clean_df[[name_col, lat_col, lon_col]].to_dict('records')
                 data_combined.sort(key=lambda x: (x[lat_col], x[lon_col]))
