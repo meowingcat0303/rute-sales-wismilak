@@ -99,11 +99,12 @@ if df is not None:
     with tab1:
         has_kode = kode_col != "Tidak Ada"
         
-        # LOGIKA PERBAIKAN: Fitur Copas HANYA muncul jika sumbernya dari Google Sheets Master
         if source == "Google Sheets Master":
             st.subheader("🔍 Generate Link via Copas Kode Toko")
             if not has_kode:
-                st.warning("⚠️ Pilih 'Kolom Kode Toko' di sidebar kiri.")
+                # BAGIAN YANG DIUBAH: Penjelasan error dan cara mengatasi
+                st.warning("⚠️ Kolom yang berisi Kode Toko belum dipilih.")
+                st.info("💡 **Cara Mengatasi:** Silakan lihat menu di sebelah kiri (sidebar), cari pengaturan **'Kolom Kode Toko'**. Ubah pilihannya dari 'Tidak Ada' menjadi kolom yang memuat kode toko Anda (contohnya ubah ke: **'Nomor Customer'** atau nama kolom yang sesuai).")
             else:
                 input_codes = st.text_area("Tinggal input (paste) urutan kode toko di sini (Enter per baris):")
                 if st.button("Generate Link"):
@@ -139,10 +140,8 @@ if df is not None:
             st.subheader("Database Master Keseluruhan")
             
         else:
-            # Jika sumbernya Upload Excel, judulnya disesuaikan
             st.subheader("List Koordinat (Dari File Excel)")
 
-        # Menampilkan Data Keseluruhan / Data Upload Excel
         cols_to_use = [kode_col, name_col, lat_col, lon_col] if has_kode else [name_col, lat_col, lon_col]
         df_display = df[cols_to_use].copy()
         
@@ -150,7 +149,6 @@ if df is not None:
             df_display['Link Maps'] = df_display.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
             df_display.insert(0, "No", range(1, 1 + len(df_display)))
             
-            # Tampilan dibedakan antara Master (disembunyikan di expander) dan Upload Excel (langsung tampil penuh)
             if source == "Google Sheets Master":
                 with st.expander("Lihat Seluruh Database & Peta Master"):
                     st.data_editor(df_display, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
@@ -184,7 +182,7 @@ if df is not None:
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
         if st.button("Jalankan Optimasi"):
-            with st.spinner('Menghitung Rute Paling Efisien....'):
+            with st.spinner('Menghitung Rute Realistis...'):
                 clean_df = df.drop_duplicates(subset=[lat_col, lon_col])
                 data_combined = clean_df[[name_col, lat_col, lon_col]].to_dict('records')
                 data_combined.sort(key=lambda x: (x[lat_col], x[lon_col]))
