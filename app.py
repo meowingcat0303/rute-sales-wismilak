@@ -92,13 +92,9 @@ if df is not None:
     lat_col = st.sidebar.selectbox("Kolom Lat:", cols, index=cols.index([c for c in cols if 'lat' in c.lower()][0] if any('lat' in c.lower() for c in cols) else cols[1] if len(cols)>1 else cols[0]))
     lon_col = st.sidebar.selectbox("Kolom Long:", cols, index=cols.index([c for c in cols if 'long' in c.lower() or 'lng' in c.lower()][0] if any('long' in c.lower() or 'lng' in c.lower() for c in cols) else cols[2] if len(cols)>2 else cols[0]))
 
-    # Konversi data & perbaikan format
     df[lat_col] = pd.to_numeric(df[lat_col].astype(str).str.replace(',', '.'), errors='coerce')
     df[lon_col] = pd.to_numeric(df[lon_col].astype(str).str.replace(',', '.'), errors='coerce')
-    
-    # PERBAIKAN TOTAL: Hapus spasi (strip), samakan huruf (upper), buang .0
     df[kode_col] = df[kode_col].astype(str).apply(lambda x: x[:-2] if x.endswith('.0') else x).str.strip().str.upper()
-    
     df = df.dropna(subset=[lat_col, lon_col])
 
     tab1, tab2 = st.tabs(["📂 Mode A: Generate Data", "🚀 Mode B: Optimasi Rute"])
@@ -114,8 +110,9 @@ if df is not None:
                 input_codes = st.text_area("Tinggal input (paste) urutan kode toko di sini (Enter per baris):")
                 if st.button("Generate Link"):
                     if input_codes:
-                        # PERBAIKAN: Hapus spasi dan samakan huruf pada input user
-                        raw_list = [x.strip().upper() for x in input_codes.split('\n') if x.strip()]
+                        # PERBAIKAN: Filter baris! Hanya ambil yang TIDAK mengandung spasi (kode toko murni)
+                        # Ini otomatis membuang kalimat/tulis-tulis seperti "BERIKUT ADALAH..."
+                        raw_list = [x.strip().upper() for x in input_codes.split('\n') if x.strip() and ' ' not in x.strip()]
                         list_kode = [x[:-2] if x.endswith('.0') else x for x in raw_list]
                         
                         master_indexed = df.set_index(kode_col)
@@ -124,7 +121,7 @@ if df is not None:
                         invalid_kodes = [k for k in list_kode if k not in master_indexed.index]
 
                         if invalid_kodes:
-                            st.warning(f"Kode tidak ada di database (Periksa spasi/karakter): {', '.join(invalid_kodes)}")
+                            st.warning(f"Kode tidak ada di database: {', '.join(invalid_kodes)}")
 
                         if valid_kodes:
                             filtered_df = master_indexed.loc[valid_kodes].reset_index()
@@ -184,7 +181,7 @@ if df is not None:
                 m_a = folium.Map(location=[df_display[lat_col].mean(), df_display[lon_col].mean()], zoom_start=13)
                 for _, row in df_display.iterrows():
                     folium.Marker([row[lat_col], row[lon_col]], popup=row[name_col]).add_to(m_a)
-                html(m_b._repr_html_(), height=400)
+                html(m_a._repr_html_(), height=400)
 
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
