@@ -4,12 +4,17 @@ import requests
 from fpdf import FPDF
 import io
 import folium
+import re
 from streamlit.components.v1 import html
 
 # URL Master Anda
 MASTER_SHEET_URL = "https://docs.google.com/spreadsheets/d/11BXZ5Wt8AvuDwI0x1taxdlnNIgd4Grc9/export?format=csv"
 
-# --- FUNGSI PDF (Warna Biru untuk Link) ---
+# Fungsi pembersihan mutlak
+def clean_id(val):
+    return re.sub(r'[^A-Z0-9]', '', str(val).upper())
+
+# --- FUNGSI PDF ---
 def generate_pdf(df):
     pdf = FPDF()
     pdf.add_page()
@@ -94,7 +99,11 @@ if df is not None:
 
     df[lat_col] = pd.to_numeric(df[lat_col].astype(str).str.replace(',', '.'), errors='coerce')
     df[lon_col] = pd.to_numeric(df[lon_col].astype(str).str.replace(',', '.'), errors='coerce')
-    df[kode_col] = df[kode_col].astype(str).apply(lambda x: x[:-2] if x.endswith('.0') else x).str.strip().str.upper()
+    
+    # PERBAIKAN: Hanya bersihkan kode jika kolom yang dipilih bukan "Tidak Ada"
+    if kode_col != "Tidak Ada":
+        df[kode_col] = df[kode_col].astype(str).apply(lambda x: x[:-2] if x.endswith('.0') else x).str.strip().str.upper()
+    
     df = df.dropna(subset=[lat_col, lon_col])
 
     tab1, tab2 = st.tabs(["📂 Mode A: Generate Data", "🚀 Mode B: Optimasi Rute"])
@@ -107,18 +116,14 @@ if df is not None:
             if not has_kode:
                 st.warning("⚠️ Kolom yang berisi Kode Toko belum dipilih.")
             else:
-                input_codes = st.text_area("Tinggal input (paste) urutan kode toko di sini (Enter per baris):")
+                input_codes = st.text_area("Tinggal input (paste) urutan kode toko di sini:")
                 if st.button("Generate Link"):
                     if input_codes:
-                        # PERBAIKAN: Filter baris! Hanya ambil yang TIDAK mengandung spasi (kode toko murni)
-                        # Ini otomatis membuang kalimat/tulis-tulis seperti "BERIKUT ADALAH..."
-                        raw_list = [x.strip().upper() for x in input_codes.split('\n') if x.strip() and ' ' not in x.strip()]
-                        list_kode = [x[:-2] if x.endswith('.0') else x for x in raw_list]
-                        
+                        raw_list = [clean_id(x) for x in input_codes.split('\n') if clean_id(x) != ""]
                         master_indexed = df.set_index(kode_col)
                         
-                        valid_kodes = [k for k in list_kode if k in master_indexed.index]
-                        invalid_kodes = [k for k in list_kode if k not in master_indexed.index]
+                        valid_kodes = [k for k in raw_list if k in master_indexed.index]
+                        invalid_kodes = [k for k in raw_list if k not in master_indexed.index]
 
                         if invalid_kodes:
                             st.warning(f"Kode tidak ada di database: {', '.join(invalid_kodes)}")
