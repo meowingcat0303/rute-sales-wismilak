@@ -96,7 +96,7 @@ if df is not None:
     df[lat_col] = pd.to_numeric(df[lat_col], errors='coerce')
     df[lon_col] = pd.to_numeric(df[lon_col], errors='coerce')
     
-    # PERBAIKAN: Membuang ".0" secara otomatis agar sama persis dengan yang Anda copas
+    # Membuang ".0" dari Master Data
     df[kode_col] = df[kode_col].astype(str).apply(lambda x: x[:-2] if x.endswith('.0') else x).str.strip()
     
     df = df.dropna(subset=[lat_col, lon_col])
@@ -115,7 +115,10 @@ if df is not None:
                 input_codes = st.text_area("Tinggal input (paste) urutan kode toko di sini (Enter per baris):")
                 if st.button("Generate Link"):
                     if input_codes:
-                        list_kode = [x.strip() for x in input_codes.split('\n') if x.strip()]
+                        # PERBAIKAN: Membuang ".0" dari teks yang Anda copas agar sama persis dengan Master Data
+                        raw_list = [x.strip() for x in input_codes.split('\n') if x.strip()]
+                        list_kode = [x[:-2] if x.endswith('.0') else x for x in raw_list]
+                        
                         master_indexed = df.set_index(kode_col)
                         
                         valid_kodes = [k for k in list_kode if k in master_indexed.index]
