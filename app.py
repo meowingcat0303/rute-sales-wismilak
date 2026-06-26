@@ -112,11 +112,11 @@ if df is not None:
         has_kode = kode_col != "Tidak Ada"
         
         if source == "Google Sheets Master":
-            st.subheader("🔍 Generate Link via Copas Kode Toko")
+            st.subheader("🔍 Generate Link Google Maps")
             if not has_kode:
                 st.warning("⚠️ Kolom yang berisi Kode Toko belum dipilih.")
             else:
-                input_codes = st.text_area("Tinggal input (paste) urutan kode toko di sini:")
+                input_codes = st.text_area("Input urutan kode toko di sini:")
                 if st.button("Generate Link"):
                     if input_codes:
                         raw_list = [clean_id(x) for x in input_codes.split('\n') if clean_id(x) != ""]
