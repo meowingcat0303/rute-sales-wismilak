@@ -79,7 +79,6 @@ if df is not None:
     kode_opt = ["Tidak Ada"] + cols
     default_kode_idx = 0
     
-    # PERBAIKAN LOGIKA: Mencari kata 'customerno' terlebih dahulu agar diprioritaskan sebelum kata 'customer' umum
     for target_keyword in ['customerno', 'kode', 'code', 'customer']:
         for i, c in enumerate(cols):
             if target_keyword in c.lower():
@@ -96,7 +95,10 @@ if df is not None:
     # Konversi data ke format bersih
     df[lat_col] = pd.to_numeric(df[lat_col], errors='coerce')
     df[lon_col] = pd.to_numeric(df[lon_col], errors='coerce')
-    df[kode_col] = df[kode_col].astype(str).str.strip()
+    
+    # PERBAIKAN: Membuang ".0" secara otomatis agar sama persis dengan yang Anda copas
+    df[kode_col] = df[kode_col].astype(str).apply(lambda x: x[:-2] if x.endswith('.0') else x).str.strip()
+    
     df = df.dropna(subset=[lat_col, lon_col])
 
     tab1, tab2 = st.tabs(["📂 Mode A: Generate Data", "🚀 Mode B: Optimasi Rute"])
@@ -134,11 +136,11 @@ if df is not None:
                             st.data_editor(filtered_df, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
 
                             c3, c4 = st.columns(2)
-                            c3.download_button("📥 Download PDF", generate_pdf(filtered_df), "Daftar_Link_Toko.pdf", "application/pdf")
+                            c3.download_button("📥 Download PDF", generate_pdf(filtered_df), "Rute_Sales_Copas.pdf", "application/pdf")
                             excel_buffer_f = io.BytesIO()
                             with pd.ExcelWriter(excel_buffer_f, engine='xlsxwriter') as writer:
                                 filtered_df.to_excel(writer, index=False)
-                            c4.download_button("📥 Download Excel", excel_buffer_f.getvalue(), "Daftar_Link_Toko.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                            c4.download_button("📥 Download Excel", excel_buffer_f.getvalue(), "Rute_Sales_Copas.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             
             st.markdown("---")
             st.subheader("Database Master Keseluruhan")
