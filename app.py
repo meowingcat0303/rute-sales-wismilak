@@ -5,6 +5,8 @@ from fpdf import FPDF
 import io
 import folium
 import re
+import math
+import time
 from streamlit.components.v1 import html
 
 # URL Master Anda
@@ -59,6 +61,19 @@ def get_batch_gmaps_link(locations_list):
     waypoints = "|".join([f"{loc[0]},{loc[1]}" for loc in locations_list])
     return f"https://www.google.com/maps/dir/?api=1&origin={start[0]},{start[1]}&waypoints={waypoints}&destination={locations_list[-1][0]},{locations_list[-1][1]}&travelmode=driving"
 
+# --- FUNGSI AUTO-SORT WILAYAH (NOMINATIM API) ---
+def get_location_details(lat, lon):
+    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=18&addressdetails=1"
+    headers = {'User-Agent': 'WismilakRouteOptimizer/1.0'}
+    try:
+        res = requests.get(url, headers=headers).json()
+        address = res.get('address', {})
+        kecamatan = address.get('town', address.get('city_district', address.get('county', '-')))
+        desa = address.get('village', address.get('suburb', address.get('neighbourhood', '-')))
+        return kecamatan, desa
+    except:
+        return "-", "-"
+
 # --- UI APP ---
 st.set_page_config(layout="wide", page_title="Wismilak Optimizer")
 st.title("📍 Wismilak Route Optimizer")
@@ -100,13 +115,12 @@ if df is not None:
     df[lat_col] = pd.to_numeric(df[lat_col].astype(str).str.replace(',', '.'), errors='coerce')
     df[lon_col] = pd.to_numeric(df[lon_col].astype(str).str.replace(',', '.'), errors='coerce')
     
-    # PERBAIKAN: Hanya bersihkan kode jika kolom yang dipilih bukan "Tidak Ada"
     if kode_col != "Tidak Ada":
         df[kode_col] = df[kode_col].astype(str).apply(lambda x: x[:-2] if x.endswith('.0') else x).str.strip().str.upper()
     
     df = df.dropna(subset=[lat_col, lon_col])
 
-    tab1, tab2 = st.tabs(["📂 Mode A: Generate Data", "🚀 Mode B: Optimasi Rute"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📂 Mode A: Generate Data", "🚀 Mode B: Optimasi Rute", "🗺️ Mode C: Sort Wilayah", "📅 Mode D: Jadwal Mingguan"])
 
     with tab1:
         has_kode = kode_col != "Tidak Ada"
@@ -196,8 +210,10 @@ if df is not None:
                 data_combined = clean_df[[name_col, lat_col, lon_col]].to_dict('records')
                 data_combined.sort(key=lambda x: (x[lat_col], x[lon_col]))
                 
-                locations = [[x[lat_col], x[lon_col]] for x in data_combined]
-                names = [x[name_col] for x in data_combined]
+                # --- PERBAIKAN: Menambahkan titik Start Kantor Area Bogor ---
+                depot_lat, depot_lon = -6.509198, 106.757705
+                locations = [[depot_lat, depot_lon]] + [[x[lat_col], x[lon_col]] for x in data_combined]
+                names = ["Kantor Area Bogor"] + [x[name_col] for x in data_combined]
                 
                 coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
                 url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
@@ -234,3 +250,121 @@ if df is not None:
                 for i, node in enumerate(route_indices):
                     folium.Marker(locations[node], popup=names[node]).add_to(m_b)
                 html(m_b._repr_html_(), height=400)
+
+    with tab3:
+        st.subheader("🗺️ Mode C: Sort Wilayah (Desa/Kecamatan)")
+        st.info("Fitur ini akan mengecek koordinat ke server OpenStreetMap untuk mendeteksi Kecamatan & Desa. Karena ini menggunakan API Gratis, proses membutuhkan waktu ~1 detik per toko.")
+        
+        if st.button("Mulai Deteksi Wilayah"):
+            df_wilayah = df.copy()
+            progress_text = "Menarik data wilayah. Mohon tunggu..."
+            my_bar = st.progress(0, text=progress_text)
+            
+            kecamatan_list = []
+            desa_list = []
+            total_data = len(df_wilayah)
+            
+            for i, row in enumerate(df_wilayah.iterrows()):
+                lat, lon = row[1][lat_col], row[1][lon_col]
+                kec, desa = get_location_details(lat, lon)
+                kecamatan_list.append(kec)
+                desa_list.append(desa)
+                
+                percent_complete = int(((i + 1) / total_data) * 100)
+                my_bar.progress(percent_complete, text=f"Memproses {i+1} dari {total_data} toko...")
+                time.sleep(1)
+                
+            df_wilayah['Kecamatan'] = kecamatan_list
+            df_wilayah['Desa/Kelurahan'] = desa_list
+            my_bar.empty()
+            
+            st.success("Selesai! Data wilayah berhasil disematkan.")
+            st.dataframe(df_wilayah)
+            
+            excel_buffer_wilayah = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer_wilayah, engine='xlsxwriter') as writer:
+                df_wilayah.to_excel(writer, index=False)
+            st.download_button("📥 Download Hasil Sort Wilayah (Excel)", excel_buffer_wilayah.getvalue(), "Database_Wilayah.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    with tab4:
+        st.subheader("📅 Mode D: Jadwal Rute Mingguan Otomatis")
+        st.write("Membagi total toko Anda menjadi 6 hari kerja dengan jarak paling berdekatan (Spatial Clustering) lalu dioptimasi per hari.")
+        
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        s_senin = col1.number_input("Senin", min_value=0, value=40)
+        s_selasa = col2.number_input("Selasa", min_value=0, value=40)
+        s_rabu = col3.number_input("Rabu", min_value=0, value=40)
+        s_kamis = col4.number_input("Kamis", min_value=0, value=40)
+        s_jumat = col5.number_input("Jumat", min_value=0, value=40)
+        s_sabtu = col6.number_input("Sabtu", min_value=0, value=25)
+        
+        kuota_harian = [s_senin, s_selasa, s_rabu, s_kamis, s_jumat, s_sabtu]
+        nama_hari = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]
+        
+        if st.button("Generate Jadwal Mingguan Pintar"):
+            clean_df = df.drop_duplicates(subset=[lat_col, lon_col])
+            
+            if len(clean_df) > sum(kuota_harian):
+                st.warning(f"Total toko Anda ({len(clean_df)}) lebih besar dari total kuota hari ({sum(kuota_harian)}). Sisa toko tidak akan kebagian jadwal.")
+            
+            data_combined = clean_df.to_dict('records')
+            
+            center_lat = sum(x[lat_col] for x in data_combined) / len(data_combined)
+            center_lon = sum(x[lon_col] for x in data_combined) / len(data_combined)
+            
+            for row in data_combined:
+                row['angle'] = math.atan2(row[lat_col] - center_lat, row[lon_col] - center_lon)
+                
+            data_combined.sort(key=lambda x: x['angle'])
+            
+            current_idx = 0
+            jadwal_final = {}
+            
+            for i, hari in enumerate(nama_hari):
+                kuota = kuota_harian[i]
+                if kuota == 0 or current_idx >= len(data_combined):
+                    continue
+                    
+                chunk = data_combined[current_idx : current_idx + kuota]
+                current_idx += kuota
+                
+                # --- PERBAIKAN: Menambahkan titik Start Kantor Area Bogor untuk tiap rute harian ---
+                depot_lat, depot_lon = -6.509198, 106.757705
+                locations = [[depot_lat, depot_lon]] + [[x[lat_col], x[lon_col]] for x in chunk]
+                names = ["Kantor Area Bogor"] + [x[name_col] for x in chunk]
+                
+                coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
+                url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
+                try:
+                    res_data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
+                    matrix = res_data['durations']
+                    
+                    route_indices, total_seconds = [0], 0
+                    unvisited = list(range(1, len(locations)))
+                    while unvisited:
+                        curr = route_indices[-1]
+                        best = min(unvisited, key=lambda x: matrix[curr][x])
+                        total_seconds += matrix[curr][best]
+                        route_indices.append(best)
+                        unvisited.remove(best)
+                    route_indices.append(0)
+                    
+                    table_data = []
+                    for k in range(len(route_indices) - 1):
+                        curr, next_n = route_indices[k], route_indices[k+1]
+                        table_data.append({
+                            "Hari": hari,
+                            "Urutan": k + 1, 
+                            "Toko": names[curr], 
+                            "Waktu ke Tujuan (Menit)": round(matrix[curr][next_n] / 60, 2),
+                            "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1])
+                        })
+                    jadwal_final[hari] = pd.DataFrame(table_data)
+                except Exception as e:
+                    st.error(f"Gagal memproses rute hari {hari}. Coba sesaat lagi.")
+                    
+            st.success("Jadwal Mingguan Berhasil Dibuat!")
+            tabs_hari = st.tabs(list(jadwal_final.keys()))
+            for idx, hari in enumerate(jadwal_final.keys()):
+                with tabs_hari[idx]:
+                    st.data_editor(jadwal_final[hari], column_config={"Navigasi A->B": st.column_config.LinkColumn("Buka Maps", display_text="📍 Rute")}, use_container_width=True, hide_index=True)
