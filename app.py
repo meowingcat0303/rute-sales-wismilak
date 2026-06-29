@@ -66,7 +66,7 @@ def get_location_details(lat, lon):
     url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=18&addressdetails=1"
     headers = {'User-Agent': 'WismilakRouteOptimizer/1.0'}
     try:
-        res = requests.get(url, headers=headers).json()
+        res = requests.get(url, headers=headers, timeout=5).json()
         address = res.get('address', {})
         kecamatan = address.get('town', address.get('city_district', address.get('county', '-')))
         desa = address.get('village', address.get('suburb', address.get('neighbourhood', '-')))
@@ -158,6 +158,22 @@ if df is not None:
                             with pd.ExcelWriter(excel_buffer_f, engine='xlsxwriter') as writer:
                                 filtered_df.to_excel(writer, index=False)
                             c4.download_button("📥 Download Excel", excel_buffer_f.getvalue(), "Rute_Sales_Copas.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                            
+                            # --- TAMBAHAN VISUALISASI RUTE PETA DI MODE A ---
+                            st.markdown("### 🗺️ Visualisasi Rute (Sesuai Urutan Anda)")
+                            with st.spinner('Menggambar rute di peta...'):
+                                depot_lat, depot_lon = -6.509198, 106.757705
+                                locs_a = [[depot_lat, depot_lon]] + [[row[lat_col], row[lon_col]] for _, row in filtered_df.iterrows()]
+                                nms_a = ["Kantor Area Bogor"] + [row[name_col] for _, row in filtered_df.iterrows()]
+                                
+                                m_copas = folium.Map(location=locs_a[0], zoom_start=14)
+                                for i in range(len(locs_a) - 1):
+                                    path = get_road_geometry(locs_a[i][0], locs_a[i][1], locs_a[i+1][0], locs_a[i+1][1])
+                                    folium.PolyLine(path, color="blue", weight=5).add_to(m_copas)
+                                for i, loc in enumerate(locs_a):
+                                    folium.Marker(loc, popup=nms_a[i]).add_to(m_copas)
+                                html(m_copas._repr_html_(), height=400)
+                            # ------------------------------------------------
             
             st.markdown("---")
             st.subheader("Database Master Keseluruhan")
@@ -210,7 +226,6 @@ if df is not None:
                 data_combined = clean_df[[name_col, lat_col, lon_col]].to_dict('records')
                 data_combined.sort(key=lambda x: (x[lat_col], x[lon_col]))
                 
-                # --- PERBAIKAN: Menambahkan titik Start Kantor Area Bogor ---
                 depot_lat, depot_lon = -6.509198, 106.757705
                 locations = [[depot_lat, depot_lon]] + [[x[lat_col], x[lon_col]] for x in data_combined]
                 names = ["Kantor Area Bogor"] + [x[name_col] for x in data_combined]
@@ -328,7 +343,6 @@ if df is not None:
                 chunk = data_combined[current_idx : current_idx + kuota]
                 current_idx += kuota
                 
-                # --- PERBAIKAN: Menambahkan titik Start Kantor Area Bogor untuk tiap rute harian ---
                 depot_lat, depot_lon = -6.509198, 106.757705
                 locations = [[depot_lat, depot_lon]] + [[x[lat_col], x[lon_col]] for x in chunk]
                 names = ["Kantor Area Bogor"] + [x[name_col] for x in chunk]
