@@ -16,7 +16,7 @@ MASTER_SHEET_URL = "https://docs.google.com/spreadsheets/d/11BXZ5Wt8AvuDwI0x1tax
 def clean_id(val):
     return re.sub(r'[^A-Z0-9]', '', str(val).upper())
 
-# --- FUNGSI PDF ---
+# --- FUNGSI PDF MODE A ---
 def generate_pdf(df):
     pdf = FPDF()
     pdf.add_page()
@@ -39,6 +39,34 @@ def generate_pdf(df):
             pdf.cell(35, 10, str(row[c])[:20], border=1)
         pdf.set_text_color(0, 0, 255)
         pdf.cell(20, 10, "Buka", border=1, link=row['Link Maps'], align='C')
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln()
+    return pdf.output(dest='S').encode('latin-1')
+
+# --- FUNGSI PDF MODE B (TAMBAHAN UNTUK DOWNLOAD OPTIMASI) ---
+def generate_pdf_b(df):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(200, 10, txt="Daftar Rute Optimasi", ln=True, align='C')
+    pdf.set_font("Arial", size=10)
+    pdf.ln(5)
+    pdf.set_fill_color(200, 200, 200)
+    
+    pdf.cell(10, 10, "No", border=1, fill=True, align='C')
+    pdf.cell(65, 10, "Dari", border=1, fill=True)
+    pdf.cell(65, 10, "Ke", border=1, fill=True)
+    pdf.cell(25, 10, "Waktu", border=1, fill=True, align='C')
+    pdf.cell(25, 10, "Maps", border=1, fill=True, align='C')
+    pdf.ln()
+    
+    for _, row in df.iterrows():
+        pdf.cell(10, 10, str(row['No']), border=1, align='C')
+        pdf.cell(65, 10, str(row['Dari'])[:35], border=1)
+        pdf.cell(65, 10, str(row['Ke'])[:35], border=1)
+        pdf.cell(25, 10, f"{row['Waktu (Menit)']} Mnt", border=1, align='C')
+        pdf.set_text_color(0, 0, 255)
+        pdf.cell(25, 10, "Navigasi", border=1, link=row['Navigasi A->B'], align='C')
         pdf.set_text_color(0, 0, 0)
         pdf.ln()
     return pdf.output(dest='S').encode('latin-1')
@@ -211,7 +239,6 @@ if df is not None:
                     df_display.to_excel(writer, index=False)
                 c2.download_button("📥 Download Excel", excel_buffer.getvalue(), "Daftar_Toko.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 
-                # --- PERBAIKAN: Menambahkan Visualisasi Peta Bergaris di bagian Upload Excel Mode A ---
                 st.markdown("### 🗺️ Visualisasi Rute Awal (Sesuai Urutan Excel)")
                 with st.spinner('Menggambar rute awal di peta...'):
                     depot_lat, depot_lon = -6.509198, 106.757705
@@ -263,8 +290,20 @@ if df is not None:
                         "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
                     })
                 
-                st.data_editor(pd.DataFrame(table_data), column_config={"Navigasi A->B": st.column_config.LinkColumn("Navigasi", display_text="🗺️ Cek Rute"), "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")}, use_container_width=True, hide_index=True)
+                df_mode_b = pd.DataFrame(table_data)
+                
+                st.data_editor(df_mode_b, column_config={"Navigasi A->B": st.column_config.LinkColumn("Navigasi", display_text="🗺️ Cek Rute"), "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")}, use_container_width=True, hide_index=True)
                 st.metric("Total Waktu", f"{int(total_seconds//3600)} Jam {int((total_seconds%3600)//60)} Menit")
+                
+                # --- PERBAIKAN: Menambahkan kembali fitur download di Mode B ---
+                c1, c2 = st.columns(2)
+                c1.download_button("📥 Download PDF (Rute Optimal)", generate_pdf_b(df_mode_b), "Rute_Optimasi.pdf", "application/pdf")
+                
+                excel_buffer_b = io.BytesIO()
+                with pd.ExcelWriter(excel_buffer_b, engine='xlsxwriter') as writer:
+                    df_mode_b.to_excel(writer, index=False)
+                c2.download_button("📥 Download Excel (Rute Optimal)", excel_buffer_b.getvalue(), "Rute_Optimasi.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                # ---------------------------------------------------------------
                 
                 m_b = folium.Map(location=locations[0], zoom_start=15)
                 for i in range(len(route_indices) - 1):
