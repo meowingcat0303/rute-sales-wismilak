@@ -107,7 +107,7 @@ st.set_page_config(layout="wide", page_title="Wismilak Optimizer")
 st.title("📍 Wismilak Route Optimizer")
 
 # --- SUMBER DATA ---
-st.sidebar.subheader("⚙️ Sumber Data")
+st.sidebar.subheader("Developed By Ghalib Damarillah Asahlintang (2026)")
 source = st.sidebar.radio("Pilih Sumber Data:", ["Upload Excel", "Google Sheets Master"])
 df = None
 
