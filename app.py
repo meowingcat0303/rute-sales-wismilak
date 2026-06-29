@@ -317,7 +317,7 @@ if df is not None:
                 html(m_b._repr_html_(), height=400)
 
     with tab3:
-        st.subheader("🗺️ Mode C: Sort Wilayah (Desa/Kecamatan)")
+        st.subheader("🗺️ Mode C: Sort Wilayah (Desa/Kecamatan) <<Under Development>>")
         st.info("Fitur ini akan mengecek koordinat ke server OpenStreetMap untuk mendeteksi Kecamatan & Desa. Karena ini menggunakan API Gratis, proses membutuhkan waktu ~1 detik per toko.")
         
         if st.button("Mulai Deteksi Wilayah"):
@@ -352,7 +352,7 @@ if df is not None:
             st.download_button("📥 Download Hasil Sort Wilayah (Excel)", excel_buffer_wilayah.getvalue(), "Database_Wilayah.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     with tab4:
-        st.subheader("📅 Mode D: Jadwal Rute Mingguan Otomatis")
+        st.subheader("📅 Mode D: Jadwal Rute Mingguan Otomatis <<Under Development>>")
         st.write("Membagi total toko Anda menjadi 6 hari kerja dengan jarak paling berdekatan (Spatial Clustering) lalu dioptimasi per hari.")
         
         col1, col2, col3, col4, col5, col6 = st.columns(6)
