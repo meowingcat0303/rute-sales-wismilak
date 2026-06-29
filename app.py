@@ -7,6 +7,7 @@ import folium
 import re
 import math
 import time
+import random
 from streamlit.components.v1 import html
 
 # URL Master Anda
@@ -53,6 +54,154 @@ def get_batch_gmaps_link(locations_list):
     start = locations_list[0]
     waypoints = "|".join([f"{loc[0]},{loc[1]}" for loc in locations_list])
     return f"https://www.google.com/maps/dir/?api=1&origin={start[0]},{start[1]}&waypoints={waypoints}&destination={locations_list[-1][0]},{locations_list[-1][1]}&travelmode=driving"
+
+# ============================================================
+# FITUR BARU: ALGORITMA CLUSTERING (ASUMSI ALTERNATIF DARI GREEDY)
+# Catatan: blok ini HANYA MENAMBAH fungsi baru. Tidak ada satu pun
+# fungsi/baris di atas ini yang diubah.
+# ============================================================
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """Jarak garis lurus (km) antar 2 titik koordinat, dipakai khusus untuk proses clustering wilayah."""
+    R = 6371
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(min(1, a)))
+
+def simple_kmeans(points, k, max_iter=50):
+    """
+    K-Means ringan tanpa dependency tambahan (cuma pakai math & random bawaan Python),
+    dipakai untuk mengelompokkan toko per wilayah SEBELUM dirutekan.
+    points: list [[lat, lon], ...]
+    Return: list label cluster (0..k-1) sepanjang points
+    """
+    n = len(points)
+    if n == 0:
+        return []
+    k = max(1, min(k, n))
+
+    random.seed(42)
+    centroids = [list(p) for p in random.sample(points, k)]
+    labels = [-1] * n
+
+    for _ in range(max_iter):
+        new_labels = []
+        for p in points:
+            dists = [haversine_distance(p[0], p[1], c[0], c[1]) for c in centroids]
+            new_labels.append(dists.index(min(dists)))
+
+        if new_labels == labels:
+            break
+        labels = new_labels
+
+        for ci in range(k):
+            cluster_points = [points[i] for i in range(n) if labels[i] == ci]
+            if cluster_points:
+                centroids[ci] = [
+                    sum(p[0] for p in cluster_points) / len(cluster_points),
+                    sum(p[1] for p in cluster_points) / len(cluster_points)
+                ]
+    return labels
+
+def order_clusters_by_depot_proximity(cluster_centroids, depot_lat, depot_lon):
+    """Urutkan cluster: mulai dari cluster terdekat ke depot, lalu lanjut ke cluster terdekat berikutnya (antar centroid)."""
+    n = len(cluster_centroids)
+    visited = [False] * n
+    order = []
+    current = [depot_lat, depot_lon]
+    for _ in range(n):
+        best_idx, best_dist = None, float('inf')
+        for i in range(n):
+            if not visited[i]:
+                d = haversine_distance(current[0], current[1], cluster_centroids[i][0], cluster_centroids[i][1])
+                if d < best_dist:
+                    best_dist, best_idx = d, i
+        order.append(best_idx)
+        visited[best_idx] = True
+        current = cluster_centroids[best_idx]
+    return order
+
+def solve_route_with_clustering(raw_locations, depot_lat, depot_lon, n_clusters=None):
+    """
+    Asumsi alternatif dari Greedy: kelompokkan toko per wilayah (cluster) dulu,
+    urutkan cluster dari yang terdekat ke depot, lalu DI DALAM tiap cluster baru
+    dijalankan Nearest Neighbor (memakai matrix waktu tempuh asli OSRM, sama persis
+    seperti perhitungan di mode Greedy). Tujuannya mengunci kurir di satu wilayah
+    dulu sebelum pindah wilayah, supaya tidak 'melompat' jauh akibat struktur jalan
+    (gang vs jalan utama) seperti dijelaskan pada analisis sebelumnya.
+
+    raw_locations: list [[lat, lon], ...] TANPA depot
+    Return:
+        visit_order : list index (basis raw_locations, 0-based) sesuai urutan kunjungan
+        leg_seconds : list waktu tempuh (detik) per leg perjalanan
+                      (leg pertama = depot->toko pertama, leg terakhir = toko terakhir->depot)
+    """
+    n = len(raw_locations)
+    if n == 0:
+        return [], []
+    if n_clusters is None or n_clusters <= 0:
+        n_clusters = max(1, round(n / 10))
+    n_clusters = min(n_clusters, n)
+
+    labels = simple_kmeans(raw_locations, n_clusters)
+    clusters = {}
+    for i, lbl in enumerate(labels):
+        clusters.setdefault(lbl, []).append(i)
+    cluster_ids = list(clusters.keys())
+
+    centroids = []
+    for cid in cluster_ids:
+        idxs = clusters[cid]
+        centroids.append([
+            sum(raw_locations[i][0] for i in idxs) / len(idxs),
+            sum(raw_locations[i][1] for i in idxs) / len(idxs)
+        ])
+
+    cluster_visit_order = order_clusters_by_depot_proximity(centroids, depot_lat, depot_lon)
+
+    visit_order, leg_seconds = [], []
+    current_pos = [depot_lat, depot_lon]
+
+    for pos in cluster_visit_order:
+        cid = cluster_ids[pos]
+        member_idxs = clusters[cid]
+        sub_points = [raw_locations[i] for i in member_idxs]
+
+        temp_points = [current_pos] + sub_points
+        coords = ";".join([f"{p[1]},{p[0]}" for p in temp_points])
+        url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
+        try:
+            res_data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
+            matrix = res_data['durations']
+        except:
+            matrix = [[0] * len(temp_points) for _ in temp_points]
+
+        local_route = [0]
+        unvisited_local = list(range(1, len(temp_points)))
+        while unvisited_local:
+            curr = local_route[-1]
+            best = min(unvisited_local, key=lambda x: matrix[curr][x])
+            leg_seconds.append(matrix[curr][best])
+            local_route.append(best)
+            unvisited_local.remove(best)
+
+        for local_idx in local_route[1:]:
+            real_idx = member_idxs[local_idx - 1]
+            visit_order.append(real_idx)
+
+        current_pos = sub_points[local_route[-1] - 1]
+
+    try:
+        back_url = f"http://router.project-osrm.org/route/v1/driving/{current_pos[1]},{current_pos[0]};{depot_lon},{depot_lat}?overview=false"
+        back_data = requests.get(back_url).json()
+        back_seconds = back_data['routes'][0]['duration']
+    except:
+        back_seconds = 0
+    leg_seconds.append(back_seconds)
+
+    return visit_order, leg_seconds
 
 # --- FUNGSI PDF MODE A ---
 def generate_pdf(df):
@@ -214,6 +363,24 @@ if df is not None:
 
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
+
+        # ============================================================
+        # FITUR BARU: PILIHAN ASUMSI ALGORITMA (DEFAULT TETAP GREEDY)
+        # ============================================================
+        algo_mode_b = st.radio(
+            "🧠 Pilih Asumsi Algoritma Rute:",
+            ["Greedy (Default - Titik Terdekat)", "Clustering (Kelompokkan Wilayah Dulu)"],
+            horizontal=True,
+            key="algo_choice_mode_b",
+            help="Greedy: mesin selalu memilih toko terdekat dari posisi sekarang (cepat, tapi bisa 'melompat' keluar-masuk wilayah karena struktur jalan). Clustering: toko dikelompokkan per wilayah dulu, kurir menyelesaikan satu wilayah sebelum pindah ke wilayah lain (mencegah lompat jauh, total waktu bisa sedikit berbeda)."
+        )
+        n_cluster_input_b = None
+        if not algo_mode_b.startswith("Greedy"):
+            n_cluster_input_b = st.number_input(
+                "Jumlah Kelompok Wilayah (Cluster):", min_value=0, value=0, step=1,
+                help="Isi 0 untuk otomatis (kira-kira 1 cluster per 10 toko)."
+            )
+
         if st.button("Jalankan Optimasi"):
             with st.spinner('Menghitung Rute Realistis...'):
                 clean_df = df.drop_duplicates(subset=[lat_col, lon_col])
@@ -226,33 +393,61 @@ if df is not None:
                 locations = [[depot_lat, depot_lon]] + [[x[lat_col], x[lon_col]] for x in data_combined]
                 names = ["Kantor Area Bogor"] + [x[name_col] for x in data_combined]
                 codes = ["-"] + [(x[kode_col] if has_kode_b else "-") for x in data_combined]
-                
-                coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
-                url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
-                data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
-                matrix = data['durations']
-                
-                route_indices, total_seconds = [0], 0
-                unvisited = list(range(1, len(locations)))
-                while unvisited:
-                    curr = route_indices[-1]
-                    best = min(unvisited, key=lambda x: matrix[curr][x])
-                    total_seconds += matrix[curr][best]
-                    route_indices.append(best)
-                    unvisited.remove(best)
-                route_indices.append(0)
-                
-                table_data = []
-                for i in range(len(route_indices) - 1):
-                    curr, next_n = route_indices[i], route_indices[i+1]
-                    table_data.append({
-                        "Checklist": False, "Kode Customer": codes[next_n], "No": i + 1, "Dari": names[curr], "Ke": names[next_n],
-                        "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2),
-                        "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
-                        "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
-                    })
-                df_mode_b = pd.DataFrame(table_data)
-                
+
+                if algo_mode_b.startswith("Greedy"):
+                    # ====================================================
+                    # KODE ASLI - GREEDY NEAREST NEIGHBOR (TIDAK DIUBAH)
+                    # ====================================================
+                    coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
+                    url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
+                    data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
+                    matrix = data['durations']
+                    
+                    route_indices, total_seconds = [0], 0
+                    unvisited = list(range(1, len(locations)))
+                    while unvisited:
+                        curr = route_indices[-1]
+                        best = min(unvisited, key=lambda x: matrix[curr][x])
+                        total_seconds += matrix[curr][best]
+                        route_indices.append(best)
+                        unvisited.remove(best)
+                    route_indices.append(0)
+                    
+                    table_data = []
+                    for i in range(len(route_indices) - 1):
+                        curr, next_n = route_indices[i], route_indices[i+1]
+                        table_data.append({
+                            "Checklist": False, "Kode Customer": codes[next_n], "No": i + 1, "Dari": names[curr], "Ke": names[next_n],
+                            "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2),
+                            "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
+                            "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
+                        })
+                    df_mode_b = pd.DataFrame(table_data)
+                else:
+                    # ====================================================
+                    # KODE BARU - CLUSTERING WILAYAH DULU, BARU GREEDY PER KLASTER
+                    # ====================================================
+                    raw_locations_b = locations[1:]
+                    n_cluster_b = int(n_cluster_input_b) if n_cluster_input_b else max(1, round(len(raw_locations_b) / 10))
+                    visit_order_b, leg_seconds_b = solve_route_with_clustering(raw_locations_b, depot_lat, depot_lon, n_clusters=n_cluster_b)
+
+                    route_indices = [0] + [idx + 1 for idx in visit_order_b] + [0]
+                    total_seconds = sum(leg_seconds_b)
+
+                    table_data = []
+                    for i in range(len(route_indices) - 1):
+                        curr, next_n = route_indices[i], route_indices[i+1]
+                        table_data.append({
+                            "Checklist": False, "Kode Customer": codes[next_n], "No": i + 1, "Dari": names[curr], "Ke": names[next_n],
+                            "Waktu (Menit)": round(leg_seconds_b[i] / 60, 2),
+                            "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
+                            "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
+                        })
+                    df_mode_b = pd.DataFrame(table_data)
+
+                # ========================================================
+                # KODE ASLI DI BAWAH INI TETAP SAMA UNTUK SEMUA MODE (TIDAK DIUBAH)
+                # ========================================================
                 st.data_editor(df_mode_b, column_config={"Navigasi A->B": st.column_config.LinkColumn("Navigasi", display_text="🗺️ Cek Rute"), "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")}, width='stretch', hide_index=True)
                 st.metric("Total Waktu", f"{int(total_seconds//3600)} Jam {int((total_seconds%3600)//60)} Menit")
                 
@@ -295,6 +490,24 @@ if df is not None:
 
     with tab4:
         st.subheader("📅 Mode D: Jadwal Rute Mingguan Otomatis")
+
+        # ============================================================
+        # FITUR BARU: PILIHAN ASUMSI ALGORITMA (DEFAULT TETAP GREEDY)
+        # ============================================================
+        algo_mode_d = st.radio(
+            "🧠 Pilih Asumsi Algoritma Rute Harian:",
+            ["Greedy (Default - Titik Terdekat)", "Clustering (Kelompokkan Wilayah Dulu)"],
+            horizontal=True,
+            key="algo_choice_mode_d",
+            help="Greedy: rute tiap hari dihitung murni titik terdekat berikutnya. Clustering: toko dalam satu hari dikelompokkan per wilayah kecil dulu, kurir menyelesaikan satu wilayah sebelum pindah, agar tidak 'melompat' antar gang."
+        )
+        n_cluster_input_d = None
+        if not algo_mode_d.startswith("Greedy"):
+            n_cluster_input_d = st.number_input(
+                "Jumlah Kelompok Wilayah per Hari (Cluster):", min_value=0, value=0, step=1,
+                help="Isi 0 untuk otomatis (kira-kira 1 cluster per 8 toko per hari)."
+            )
+
         s = [st.number_input(h, min_value=0, value=40) for h in ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]]
         if st.button("Generate Jadwal Mingguan"):
             clean_df = df.drop_duplicates(subset=[lat_col, lon_col])
@@ -312,31 +525,58 @@ if df is not None:
                 locations = [[depot_lat, depot_lon]] + [[x[lat_col], x[lon_col]] for x in chunk]
                 names = ["Kantor Area Bogor"] + [x[name_col] for x in chunk]
                 codes = ["-"] + [str(x[kode_col]) if kode_col != "Tidak Ada" else "-" for x in chunk]
-                
-                coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
-                url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
-                try:
-                    res_data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
-                    matrix = res_data['durations']
-                    route_indices, total_seconds = [0], 0
-                    unvisited = list(range(1, len(locations)))
-                    while unvisited:
-                        curr = route_indices[-1]
-                        best = min(unvisited, key=lambda x: matrix[curr][x])
-                        total_seconds += matrix[curr][best]
-                        route_indices.append(best)
-                        unvisited.remove(best)
-                    route_indices.append(0)
-                    table_data = []
-                    for k in range(len(route_indices) - 1):
-                        curr, next_n = route_indices[k], route_indices[k+1]
-                        table_data.append({
-                            "Hari": hari, "Urutan": k + 1, "Kode Customer": codes[next_n], "Toko": names[next_n],
-                            "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2), "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1])
-                        })
-                    jadwal_final[hari] = pd.DataFrame(table_data)
-                except:
-                    st.error(f"Gagal rute {hari}")
+
+                if algo_mode_d.startswith("Greedy"):
+                    # ====================================================
+                    # KODE ASLI - GREEDY NEAREST NEIGHBOR (TIDAK DIUBAH)
+                    # ====================================================
+                    coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
+                    url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
+                    try:
+                        res_data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
+                        matrix = res_data['durations']
+                        route_indices, total_seconds = [0], 0
+                        unvisited = list(range(1, len(locations)))
+                        while unvisited:
+                            curr = route_indices[-1]
+                            best = min(unvisited, key=lambda x: matrix[curr][x])
+                            total_seconds += matrix[curr][best]
+                            route_indices.append(best)
+                            unvisited.remove(best)
+                        route_indices.append(0)
+                        table_data = []
+                        for k in range(len(route_indices) - 1):
+                            curr, next_n = route_indices[k], route_indices[k+1]
+                            table_data.append({
+                                "Hari": hari, "Urutan": k + 1, "Kode Customer": codes[next_n], "Toko": names[next_n],
+                                "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2), "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1])
+                            })
+                        jadwal_final[hari] = pd.DataFrame(table_data)
+                    except:
+                        st.error(f"Gagal rute {hari}")
+                else:
+                    # ====================================================
+                    # KODE BARU - CLUSTERING WILAYAH DULU, BARU GREEDY PER KLASTER
+                    # ====================================================
+                    try:
+                        raw_locations_d = locations[1:]
+                        n_cluster_d = int(n_cluster_input_d) if n_cluster_input_d else max(1, round(len(raw_locations_d) / 8))
+                        visit_order_d, leg_seconds_d = solve_route_with_clustering(raw_locations_d, depot_lat, depot_lon, n_clusters=n_cluster_d)
+
+                        table_data = []
+                        prev_lat, prev_lon = depot_lat, depot_lon
+                        for k, real_idx in enumerate(visit_order_d):
+                            store_idx = real_idx + 1
+                            cur_lat, cur_lon = locations[store_idx][0], locations[store_idx][1]
+                            table_data.append({
+                                "Hari": hari, "Urutan": k + 1, "Kode Customer": codes[store_idx], "Toko": names[store_idx],
+                                "Waktu (Menit)": round(leg_seconds_d[k] / 60, 2),
+                                "Navigasi A->B": get_single_leg_link(prev_lat, prev_lon, cur_lat, cur_lon)
+                            })
+                            prev_lat, prev_lon = cur_lat, cur_lon
+                        jadwal_final[hari] = pd.DataFrame(table_data)
+                    except:
+                        st.error(f"Gagal rute {hari}")
             
             st.success("Jadwal Berhasil!")
             tabs_hari = st.tabs(list(jadwal_final.keys()))
