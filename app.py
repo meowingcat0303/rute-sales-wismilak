@@ -16,6 +16,44 @@ MASTER_SHEET_URL = "https://docs.google.com/spreadsheets/d/11BXZ5Wt8AvuDwI0x1tax
 def clean_id(val):
     return re.sub(r'[^A-Z0-9]', '', str(val).upper())
 
+# OPTIMASI 1: Amankan penarikan data Google Sheets di memori agar tidak membebani RAM setiap kali klik
+@st.cache_data(ttl=600) # Cache diperbarui otomatis tiap 10 menit
+def fetch_master_data(url):
+    return pd.read_csv(url)
+
+# OPTIMASI 2: Amankan penyimpanan rute jalan agar tidak menembak API OSRM berulang-ulang untuk titik yang sama
+@st.cache_data(ttl=86400) # Menyimpan data rute jalan selama 24 jam
+def get_road_geometry(lat1, lon1, lat2, lon2):
+    url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
+    try:
+        res = requests.get(url).json()
+        coords = res['routes'][0]['geometry']['coordinates']
+        return [[c[1], c[0]] for c in coords]
+    except:
+        return [[lat1, lon1], [lat2, lon2]]
+
+# OPTIMASI 3: Amankan proses deteksi wilayah OpenStreetMap agar server tidak kelelahan saat data kota membesar
+@st.cache_data(ttl=86400)
+def get_location_details(lat, lon):
+    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=18&addressdetails=1"
+    headers = {'User-Agent': 'WismilakRouteOptimizer/1.0'}
+    try:
+        res = requests.get(url, headers=headers, timeout=5).json()
+        address = res.get('address', {})
+        kecamatan = address.get('town', address.get('city_district', address.get('county', '-')))
+        desa = address.get('village', address.get('suburb', address.get('neighbourhood', '-')))
+        return kecamatan, desa
+    except:
+        return "-", "-"
+
+def get_single_leg_link(lat1, lon1, lat2, lon2):
+    return f"https://www.google.com/maps/dir/?api=1&origin={lat1},{lon1}&destination={lat2},{lon2}&travelmode=driving"
+
+def get_batch_gmaps_link(locations_list):
+    start = locations_list[0]
+    waypoints = "|".join([f"{loc[0]},{loc[1]}" for loc in locations_list])
+    return f"https://www.google.com/maps/dir/?api=1&origin={start[0]},{start[1]}&waypoints={waypoints}&destination={locations_list[-1][0]},{locations_list[-1][1]}&travelmode=driving"
+
 # --- FUNGSI PDF MODE A ---
 def generate_pdf(df):
     pdf = FPDF()
@@ -27,9 +65,8 @@ def generate_pdf(df):
     pdf.set_fill_color(200, 200, 200)
     
     cols = df.columns.tolist()
-    # Menyesuaikan agar PDF juga mengikuti urutan kolom baru
-    pdf.cell(25, 10, str(cols[0]), border=1, fill=True) # Kode
-    pdf.cell(10, 10, str(cols[1]), border=1, fill=True) # No
+    pdf.cell(25, 10, str(cols[0]), border=1, fill=True)
+    pdf.cell(10, 10, str(cols[1]), border=1, fill=True)
     for c in cols[2:-1]:
         pdf.cell(35, 10, str(c), border=1, fill=True)
     pdf.cell(20, 10, "Maps", border=1, fill=True)
@@ -60,52 +97,21 @@ def generate_pdf_b(df):
     pdf.cell(10, 10, "No", border=1, fill=True, align='C')
     pdf.cell(55, 10, "Dari", border=1, fill=True)
     pdf.cell(55, 10, "Ke", border=1, fill=True)
-    pdf.cell(20, 10, "Waktu", border=1, fill=True, align='C')
-    pdf.cell(20, 10, "Maps", border=1, fill=True, align='C')
+    pdf.cell(25, 10, "Waktu", border=1, fill=True, align='C')
+    pdf.cell(25, 10, "Maps", border=1, fill=True, align='C')
     pdf.ln()
     
     for _, row in df.iterrows():
         pdf.cell(25, 10, str(row['Kode Customer']), border=1)
         pdf.cell(10, 10, str(row['No']), border=1, align='C')
-        pdf.cell(55, 10, str(row['Dari'])[:30], border=1)
-        pdf.cell(55, 10, str(row['Ke'])[:30], border=1)
-        pdf.cell(20, 10, f"{row['Waktu (Menit)']} Mnt", border=1, align='C')
+        pdf.cell(55, 10, str(row['Dari'])[:35], border=1)
+        pdf.cell(55, 10, str(row['Ke'])[:35], border=1)
+        pdf.cell(25, 10, f"{row['Waktu (Menit)']} Mnt", border=1, align='C')
         pdf.set_text_color(0, 0, 255)
-        pdf.cell(20, 10, "Nav", border=1, link=row['Navigasi A->B'], align='C')
+        pdf.cell(25, 10, "Navigasi", border=1, link=row['Navigasi A->B'], align='C')
         pdf.set_text_color(0, 0, 0)
         pdf.ln()
     return pdf.output(dest='S').encode('latin-1')
-
-# --- FUNGSI MAPS ---
-def get_road_geometry(lat1, lon1, lat2, lon2):
-    url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
-    try:
-        res = requests.get(url).json()
-        coords = res['routes'][0]['geometry']['coordinates']
-        return [[c[1], c[0]] for c in coords]
-    except:
-        return [[lat1, lon1], [lat2, lon2]]
-
-def get_single_leg_link(lat1, lon1, lat2, lon2):
-    return f"https://www.google.com/maps/dir/?api=1&origin={lat1},{lon1}&destination={lat2},{lon2}&travelmode=driving"
-
-def get_batch_gmaps_link(locations_list):
-    start = locations_list[0]
-    waypoints = "|".join([f"{loc[0]},{loc[1]}" for loc in locations_list])
-    return f"https://www.google.com/maps/dir/?api=1&origin={start[0]},{start[1]}&waypoints={waypoints}&destination={locations_list[-1][0]},{locations_list[-1][1]}&travelmode=driving"
-
-# --- FUNGSI AUTO-SORT WILAYAH (NOMINATIM API) ---
-def get_location_details(lat, lon):
-    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=18&addressdetails=1"
-    headers = {'User-Agent': 'WismilakRouteOptimizer/1.0'}
-    try:
-        res = requests.get(url, headers=headers, timeout=5).json()
-        address = res.get('address', {})
-        kecamatan = address.get('town', address.get('city_district', address.get('county', '-')))
-        desa = address.get('village', address.get('suburb', address.get('neighbourhood', '-')))
-        return kecamatan, desa
-    except:
-        return "-", "-"
 
 # --- UI APP ---
 st.set_page_config(layout="wide", page_title="Wismilak Optimizer")
@@ -122,7 +128,9 @@ if source == "Upload Excel":
         df = pd.read_excel(uploaded_file)
 else:
     try:
-        df = pd.read_csv(MASTER_SHEET_URL)
+        # Menggunakan fungsi ter-cache agar ram hemat dan aman dari penambahan data kota
+        df_raw = fetch_master_data(MASTER_SHEET_URL)
+        df = df_raw.copy()
         st.sidebar.success("Master Data Terhubung!")
     except:
         st.sidebar.error("Gagal terhubung ke Google Sheet.")
@@ -157,93 +165,52 @@ if df is not None:
 
     with tab1:
         has_kode = kode_col != "Tidak Ada"
-        
         if source == "Google Sheets Master":
             st.subheader("🔍 Generate Link Google Maps")
-            if not has_kode:
-                st.warning("⚠️ Kolom yang berisi Kode Toko belum dipilih.")
-            else:
+            if has_kode:
                 input_codes = st.text_area("Input urutan kode toko di sini:")
                 if st.button("Generate Link"):
-                    if input_codes:
-                        raw_list = [clean_id(x) for x in input_codes.split('\n') if clean_id(x) != ""]
-                        master_indexed = df.set_index(kode_col)
+                    raw_list = [clean_id(x) for x in input_codes.split('\n') if clean_id(x) != ""]
+                    master_indexed = df.set_index(kode_col)
+                    valid_kodes = [k for k in raw_list if k in master_indexed.index]
+                    if valid_kodes:
+                        filtered_df = master_indexed.loc[valid_kodes].reset_index()
+                        filtered_df = filtered_df.rename(columns={'index': kode_col})
+                        filtered_df = filtered_df[[kode_col, name_col, lat_col, lon_col]].copy()
+                        filtered_df['Link Maps'] = filtered_df.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
+                        filtered_df.insert(0, "No", range(1, 1 + len(filtered_df)))
+                        filtered_df = filtered_df[[kode_col, 'No', name_col, lat_col, lon_col, 'Link Maps']]
                         
-                        valid_kodes = [k for k in raw_list if k in master_indexed.index]
-                        invalid_kodes = [k for k in raw_list if k not in master_indexed.index]
-
-                        if invalid_kodes:
-                            st.warning(f"Kode tidak ada di database: {', '.join(invalid_kodes)}")
-
-                        if valid_kodes:
-                            filtered_df = master_indexed.loc[valid_kodes].reset_index()
-                            filtered_df = filtered_df.rename(columns={'index': kode_col})
-                            filtered_df = filtered_df[[kode_col, name_col, lat_col, lon_col]].copy()
-                            filtered_df['Link Maps'] = filtered_df.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
-                            filtered_df.insert(0, "No", range(1, 1 + len(filtered_df)))
-                            
-                            # Reorder: Kode ke kiri No
-                            filtered_df = filtered_df[[kode_col, 'No', name_col, lat_col, lon_col, 'Link Maps']]
-
-                            st.success(f"Berhasil: {len(valid_kodes)} toko ditemukan!")
-                            st.data_editor(filtered_df, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
-
-                            c3, c4 = st.columns(2)
-                            c3.download_button("📥 Download PDF", generate_pdf(filtered_df), "Rute_Sales_Copas.pdf", "application/pdf")
-                            excel_buffer_f = io.BytesIO()
-                            with pd.ExcelWriter(excel_buffer_f, engine='xlsxwriter') as writer:
-                                filtered_df.to_excel(writer, index=False)
-                            c4.download_button("📥 Download Excel", excel_buffer_f.getvalue(), "Rute_Sales_Copas.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                            
-                            st.markdown("### 🗺️ Visualisasi Rute")
-                            with st.spinner('Menggambar rute...'):
-                                depot_lat, depot_lon = -6.509198, 106.757705
-                                locs_a = [[depot_lat, depot_lon]] + [[row[lat_col], row[lon_col]] for _, row in filtered_df.iterrows()]
-                                nms_a = ["Kantor Area Bogor"] + [row[name_col] for _, row in filtered_df.iterrows()]
-                                m_copas = folium.Map(location=locs_a[0], zoom_start=14)
-                                for i in range(len(locs_a) - 1):
-                                    path = get_road_geometry(locs_a[i][0], locs_a[i][1], locs_a[i+1][0], locs_a[i+1][1])
-                                    folium.PolyLine(path, color="blue", weight=5).add_to(m_copas)
-                                for i, loc in enumerate(locs_a):
-                                    folium.Marker(loc, popup=nms_a[i]).add_to(m_copas)
-                                html(m_copas._repr_html_(), height=400)
-            
-            st.markdown("---")
-            st.subheader("Database Master Keseluruhan")
-            
+                        st.data_editor(filtered_df, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, width='stretch', hide_index=True)
+                        
+                        c3, c4 = st.columns(2)
+                        c3.download_button("📥 Download PDF", generate_pdf(filtered_df), "Rute_Sales_Copas.pdf", "application/pdf")
+                        excel_buffer_f = io.BytesIO()
+                        with pd.ExcelWriter(excel_buffer_f, engine='xlsxwriter') as writer:
+                            filtered_df.to_excel(writer, index=False)
+                        c4.download_button("📥 Download Excel", excel_buffer_f.getvalue(), "Rute_Sales_Copas.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        
+                        st.markdown("### 🗺️ Visualisasi Rute")
+                        with st.spinner('Menggambar rute...'):
+                            depot_lat, depot_lon = -6.509198, 106.757705
+                            locs_a = [[depot_lat, depot_lon]] + [[row[lat_col], row[lon_col]] for _, row in filtered_df.iterrows()]
+                            nms_a = ["Kantor Area Bogor"] + [row[name_col] for _, row in filtered_df.iterrows()]
+                            m_copas = folium.Map(location=locs_a[0], zoom_start=14)
+                            for i in range(len(locs_a) - 1):
+                                path = get_road_geometry(locs_a[i][0], locs_a[i][1], locs_a[i+1][0], locs_a[i+1][1])
+                                folium.PolyLine(path, color="blue", weight=5).add_to(m_copas)
+                            for i, loc in enumerate(locs_a):
+                                folium.Marker(loc, popup=nms_a[i]).add_to(m_copas)
+                            html(m_copas._repr_html_(), height=400)
         else:
-            st.subheader("List Koordinat (Dari File Excel)")
-
-        cols_to_use = [kode_col, name_col, lat_col, lon_col] if has_kode else [name_col, lat_col, lon_col]
-        df_display = df[cols_to_use].copy()
-        
-        if not df_display.empty:
-            df_display['Link Maps'] = df_display.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
-            df_display.insert(0, "No", range(1, 1 + len(df_display)))
-            if has_kode:
-                df_display = df_display[[kode_col, 'No'] + [c for c in df_display.columns if c not in ['No', kode_col]]]
-            
-            st.data_editor(df_display, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
-            
-            c1, c2 = st.columns(2)
-            c1.download_button("📥 Download PDF", generate_pdf(df_display), "Daftar_Toko.pdf", "application/pdf")
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                df_display.to_excel(writer, index=False)
-            c2.download_button("📥 Download Excel", excel_buffer.getvalue(), "Daftar_Toko.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            
-            st.markdown("### 🗺️ Visualisasi Rute Awal")
-            with st.spinner('Menggambar rute...'):
-                depot_lat, depot_lon = -6.509198, 106.757705
-                locs_a = [[depot_lat, depot_lon]] + [[row[lat_col], row[lon_col]] for _, row in df_display.iterrows()]
-                nms_a = ["Kantor Area Bogor"] + [row[name_col] for _, row in df_display.iterrows()]
-                m_a = folium.Map(location=locs_a[0], zoom_start=13)
-                for i in range(len(locs_a) - 1):
-                    path = get_road_geometry(locs_a[i][0], locs_a[i][1], locs_a[i+1][0], locs_a[i+1][1])
-                    folium.PolyLine(path, color="blue", weight=5).add_to(m_a)
-                for i, loc in enumerate(locs_a):
-                    folium.Marker(loc, popup=nms_a[i]).add_to(m_a)
-                html(m_a._repr_html_(), height=400)
+            cols_to_use = [kode_col, name_col, lat_col, lon_col] if has_kode else [name_col, lat_col, lon_col]
+            df_display = df[cols_to_use].copy()
+            if not df_display.empty:
+                df_display['Link Maps'] = df_display.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
+                df_display.insert(0, "No", range(1, 1 + len(df_display)))
+                if has_kode:
+                    df_display = df_display[[kode_col, 'No'] + [c for c in df_display.columns if c not in ['No', kode_col]]]
+                st.data_editor(df_display, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, width='stretch', hide_index=True)
 
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
@@ -285,15 +252,17 @@ if df is not None:
                         "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
                     })
                 df_mode_b = pd.DataFrame(table_data)
-                st.data_editor(df_mode_b, column_config={"Navigasi A->B": st.column_config.LinkColumn("Navigasi", display_text="🗺️ Cek Rute"), "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")}, use_container_width=True, hide_index=True)
+                
+                st.data_editor(df_mode_b, column_config={"Navigasi A->B": st.column_config.LinkColumn("Navigasi", display_text="🗺️ Cek Rute"), "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")}, width='stretch', hide_index=True)
                 st.metric("Total Waktu", f"{int(total_seconds//3600)} Jam {int((total_seconds%3600)//60)} Menit")
+                
                 c1, c2 = st.columns(2)
-                c1.download_button("📥 Download PDF", generate_pdf_b(df_mode_b), "Rute_Optimasi.pdf", "application/pdf")
+                c1.download_button("📥 Download PDF (Rute Optimal)", generate_pdf_b(df_mode_b), "Rute_Optimasi.pdf", "application/pdf")
                 excel_buffer_b = io.BytesIO()
                 with pd.ExcelWriter(excel_buffer_b, engine='xlsxwriter') as writer:
                     df_mode_b.to_excel(writer, index=False)
-                c2.download_button("📥 Download Excel", excel_buffer_b.getvalue(), "Rute_Optimasi.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                
+                c2.download_button("📥 Download Excel (Rute Optimal)", excel_buffer_b.getvalue(), "Rute_Optimasi.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
                 m_b = folium.Map(location=locations[0], zoom_start=15)
                 for i in range(len(route_indices) - 1):
                     path = get_road_geometry(locations[route_indices[i]][0], locations[route_indices[i]][1], locations[route_indices[i+1]][0], locations[route_indices[i+1]][1])
@@ -306,23 +275,19 @@ if df is not None:
         st.subheader("🗺️ Mode C: Sort Wilayah (Desa/Kecamatan)")
         if st.button("Mulai Deteksi Wilayah"):
             df_wilayah = df.copy()
-            progress_text = "Menarik data wilayah. Mohon tunggu..."
-            my_bar = st.progress(0, text=progress_text)
-            kecamatan_list = []
-            desa_list = []
+            my_bar = st.progress(0, text="Memproses...")
+            kec_list, desa_list = [], []
             total_data = len(df_wilayah)
             for i, row in enumerate(df_wilayah.iterrows()):
-                lat, lon = row[1][lat_col], row[1][lon_col]
-                kec, desa = get_location_details(lat, lon)
-                kecamatan_list.append(kec)
-                desa_list.append(desa)
-                my_bar.progress(int(((i + 1) / total_data) * 100), text=f"Memproses {i+1} dari {total_data}...")
-                time.sleep(1)
-            df_wilayah['Kecamatan'] = kecamatan_list
-            df_wilayah['Desa/Kelurahan'] = desa_list
+                # Menggunakan cache agar proses loading cepat dan andal saat regional data kota padat
+                kec, desa = get_location_details(row[1][lat_col], row[1][lon_col])
+                kec_list.append(kec); desa_list.append(desa)
+                my_bar.progress(int(((i + 1) / total_data) * 100))
+                time.sleep(0.1)
+            df_wilayah['Kecamatan'] = kec_list; df_wilayah['Desa/Kelurahan'] = desa_list
             my_bar.empty()
             st.success("Selesai!")
-            st.dataframe(df_wilayah)
+            st.dataframe(df_wilayah, width='stretch')
             excel_buffer_wilayah = io.BytesIO()
             with pd.ExcelWriter(excel_buffer_wilayah, engine='xlsxwriter') as writer:
                 df_wilayah.to_excel(writer, index=False)
@@ -330,30 +295,18 @@ if df is not None:
 
     with tab4:
         st.subheader("📅 Mode D: Jadwal Rute Mingguan Otomatis")
-        s_senin = st.number_input("Senin", min_value=0, value=40)
-        s_selasa = st.number_input("Selasa", min_value=0, value=40)
-        s_rabu = st.number_input("Rabu", min_value=0, value=40)
-        s_kamis = st.number_input("Kamis", min_value=0, value=40)
-        s_jumat = st.number_input("Jumat", min_value=0, value=40)
-        s_sabtu = st.number_input("Sabtu", min_value=0, value=25)
-        
-        kuota_harian = [s_senin, s_selasa, s_rabu, s_kamis, s_jumat, s_sabtu]
-        nama_hari = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]
-        
+        s = [st.number_input(h, min_value=0, value=40) for h in ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]]
         if st.button("Generate Jadwal Mingguan"):
             clean_df = df.drop_duplicates(subset=[lat_col, lon_col])
-            data_combined = clean_df.to_dict('records')
-            center_lat, center_lon = clean_df[lat_col].mean(), clean_df[lon_col].mean()
-            for row in data_combined:
-                row['angle'] = math.atan2(row[lat_col] - center_lat, row[lon_col] - center_lon)
-            data_combined.sort(key=lambda x: x['angle'])
-            
-            current_idx = 0
+            data = clean_df.to_dict('records')
+            clat, clon = clean_df[lat_col].mean(), clean_df[lon_col].mean()
+            for r in data: r['angle'] = math.atan2(r[lat_col] - clat, r[lon_col] - clon)
+            data.sort(key=lambda x: x['angle'])
+            idx = 0
             jadwal_final = {}
-            for i, hari in enumerate(nama_hari):
-                kuota = kuota_harian[i]
-                chunk = data_combined[current_idx : current_idx + kuota]
-                current_idx += kuota
+            for i, hari in enumerate(["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]):
+                chunk = data[idx : idx + s[i]]; idx += s[i]
+                if not chunk: continue
                 
                 depot_lat, depot_lon = -6.509198, 106.757705
                 locations = [[depot_lat, depot_lon]] + [[x[lat_col], x[lon_col]] for x in chunk]
@@ -389,4 +342,4 @@ if df is not None:
             tabs_hari = st.tabs(list(jadwal_final.keys()))
             for idx, hari in enumerate(jadwal_final.keys()):
                 with tabs_hari[idx]:
-                    st.data_editor(jadwal_final[hari], column_config={"Navigasi A->B": st.column_config.LinkColumn("Buka", display_text="📍 Rute")}, use_container_width=True, hide_index=True)
+                    st.data_editor(jadwal_final[hari], column_config={"Navigasi A->B": st.column_config.LinkColumn("Buka", display_text="📍 Rute")}, width='stretch', hide_index=True)
