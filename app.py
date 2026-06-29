@@ -258,12 +258,15 @@ if df is not None:
         if st.button("Jalankan Optimasi"):
             with st.spinner('Menghitung Rute Realistis...'):
                 clean_df = df.drop_duplicates(subset=[lat_col, lon_col])
-                data_combined = clean_df[[name_col, lat_col, lon_col]].to_dict('records')
+                has_kode_b = kode_col != "Tidak Ada"
+                cols_b = ([kode_col] if has_kode_b else []) + [name_col, lat_col, lon_col]
+                data_combined = clean_df[cols_b].to_dict('records')
                 data_combined.sort(key=lambda x: (x[lat_col], x[lon_col]))
                 
                 depot_lat, depot_lon = -6.509198, 106.757705
                 locations = [[depot_lat, depot_lon]] + [[x[lat_col], x[lon_col]] for x in data_combined]
                 names = ["Kantor Area Bogor"] + [x[name_col] for x in data_combined]
+                codes = ["-"] + [(x[kode_col] if has_kode_b else "-") for x in data_combined]
                 
                 coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
                 url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
@@ -284,7 +287,7 @@ if df is not None:
                 for i in range(len(route_indices) - 1):
                     curr, next_n = route_indices[i], route_indices[i+1]
                     table_data.append({
-                        "Checklist": False, "No": i + 1, "Dari": names[curr], "Ke": names[next_n],
+                        "Checklist": False, "Kode Customer": codes[next_n], "No": i + 1, "Dari": names[curr], "Ke": names[next_n],
                         "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2),
                         "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
                         "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
