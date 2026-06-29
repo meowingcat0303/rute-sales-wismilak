@@ -372,7 +372,7 @@ if df is not None:
             ["Greedy (Default - Titik Terdekat)", "Clustering (Kelompokkan Wilayah Dulu)"],
             horizontal=True,
             key="algo_choice_mode_b",
-            help="Greedy: mesin selalu memilih toko terdekat dari posisi sekarang (cepat, tapi bisa 'melompat' keluar-masuk wilayah karena struktur jalan). Clustering: toko dikelompokkan per wilayah dulu, kurir menyelesaikan satu wilayah sebelum pindah ke wilayah lain (mencegah lompat jauh, total waktu bisa sedikit berbeda)."
+            help="Greedy: mesin selalu memilih toko terdekat dari posisi sekarang (cepat, tapi bisa 'melompat' keluar-masuk wilayah karena struktur jalan). Clustering: toko dikelompokkan per wilayah dulu, RTS menyelesaikan satu wilayah sebelum pindah ke wilayah lain (mencegah lompat jauh, total waktu bisa sedikit berbeda)."
         )
         n_cluster_input_b = None
         if not algo_mode_b.startswith("Greedy"):
