@@ -159,7 +159,6 @@ if df is not None:
                                 filtered_df.to_excel(writer, index=False)
                             c4.download_button("📥 Download Excel", excel_buffer_f.getvalue(), "Rute_Sales_Copas.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                             
-                            # --- TAMBAHAN VISUALISASI RUTE PETA DI MODE A ---
                             st.markdown("### 🗺️ Visualisasi Rute (Sesuai Urutan Anda)")
                             with st.spinner('Menggambar rute di peta...'):
                                 depot_lat, depot_lon = -6.509198, 106.757705
@@ -173,7 +172,6 @@ if df is not None:
                                 for i, loc in enumerate(locs_a):
                                     folium.Marker(loc, popup=nms_a[i]).add_to(m_copas)
                                 html(m_copas._repr_html_(), height=400)
-                            # ------------------------------------------------
             
             st.markdown("---")
             st.subheader("Database Master Keseluruhan")
@@ -213,10 +211,20 @@ if df is not None:
                     df_display.to_excel(writer, index=False)
                 c2.download_button("📥 Download Excel", excel_buffer.getvalue(), "Daftar_Toko.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 
-                m_a = folium.Map(location=[df_display[lat_col].mean(), df_display[lon_col].mean()], zoom_start=13)
-                for _, row in df_display.iterrows():
-                    folium.Marker([row[lat_col], row[lon_col]], popup=row[name_col]).add_to(m_a)
-                html(m_a._repr_html_(), height=400)
+                # --- PERBAIKAN: Menambahkan Visualisasi Peta Bergaris di bagian Upload Excel Mode A ---
+                st.markdown("### 🗺️ Visualisasi Rute Awal (Sesuai Urutan Excel)")
+                with st.spinner('Menggambar rute awal di peta...'):
+                    depot_lat, depot_lon = -6.509198, 106.757705
+                    locs_a = [[depot_lat, depot_lon]] + [[row[lat_col], row[lon_col]] for _, row in df_display.iterrows()]
+                    nms_a = ["Kantor Area Bogor"] + [row[name_col] for _, row in df_display.iterrows()]
+                    
+                    m_a = folium.Map(location=locs_a[0], zoom_start=13)
+                    for i in range(len(locs_a) - 1):
+                        path = get_road_geometry(locs_a[i][0], locs_a[i][1], locs_a[i+1][0], locs_a[i+1][1])
+                        folium.PolyLine(path, color="blue", weight=5).add_to(m_a)
+                    for i, loc in enumerate(locs_a):
+                        folium.Marker(loc, popup=nms_a[i]).add_to(m_a)
+                    html(m_a._repr_html_(), height=400)
 
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
