@@ -16,7 +16,7 @@ MASTER_SHEET_URL = "https://docs.google.com/spreadsheets/d/11BXZ5Wt8AvuDwI0x1tax
 def clean_id(val):
     return re.sub(r'[^A-Z0-9]', '', str(val).upper())
 
-# --- FUNGSI PDF ---
+# --- FUNGSI PDF MODE A ---
 def generate_pdf(df):
     pdf = FPDF()
     pdf.add_page()
@@ -43,7 +43,7 @@ def generate_pdf(df):
         pdf.ln()
     return pdf.output(dest='S').encode('latin-1')
 
-# --- FUNGSI PDF MODE B ---
+# --- FUNGSI PDF MODE B (TAMBAHAN UNTUK DOWNLOAD OPTIMASI) ---
 def generate_pdf_b(df):
     pdf = FPDF()
     pdf.add_page()
@@ -176,10 +176,6 @@ if df is not None:
                             filtered_df = filtered_df[[kode_col, name_col, lat_col, lon_col]].copy()
                             filtered_df['Link Maps'] = filtered_df.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
                             filtered_df.insert(0, "No", range(1, 1 + len(filtered_df)))
-                            
-                            # REORDER: Pindah Kode ke kiri 'No'
-                            col_order = [kode_col, 'No', name_col, lat_col, lon_col, 'Link Maps']
-                            filtered_df = filtered_df[col_order]
 
                             st.success(f"Berhasil: {len(valid_kodes)} toko ditemukan!")
                             st.data_editor(filtered_df, column_config={"Link Maps": st.column_config.LinkColumn("Buka", display_text="📍 Navigasi")}, use_container_width=True, hide_index=True)
@@ -217,10 +213,6 @@ if df is not None:
         if not df_display.empty:
             df_display['Link Maps'] = df_display.apply(lambda row: f"https://www.google.com/maps/dir/?api=1&destination={row[lat_col]},{row[lon_col]}", axis=1)
             df_display.insert(0, "No", range(1, 1 + len(df_display)))
-            
-            # REORDER: Pindah Kode ke kiri 'No'
-            if has_kode:
-                df_display = df_display[[kode_col, 'No'] + [c for c in df_display.columns if c not in ['No', kode_col]]]
             
             if source == "Google Sheets Master":
                 with st.expander("Lihat Seluruh Database & Peta Master"):
@@ -303,12 +295,15 @@ if df is not None:
                 st.data_editor(df_mode_b, column_config={"Navigasi A->B": st.column_config.LinkColumn("Navigasi", display_text="🗺️ Cek Rute"), "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")}, use_container_width=True, hide_index=True)
                 st.metric("Total Waktu", f"{int(total_seconds//3600)} Jam {int((total_seconds%3600)//60)} Menit")
                 
+                # --- PERBAIKAN: Menambahkan kembali fitur download di Mode B ---
                 c1, c2 = st.columns(2)
                 c1.download_button("📥 Download PDF (Rute Optimal)", generate_pdf_b(df_mode_b), "Rute_Optimasi.pdf", "application/pdf")
+                
                 excel_buffer_b = io.BytesIO()
                 with pd.ExcelWriter(excel_buffer_b, engine='xlsxwriter') as writer:
                     df_mode_b.to_excel(writer, index=False)
                 c2.download_button("📥 Download Excel (Rute Optimal)", excel_buffer_b.getvalue(), "Rute_Optimasi.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                # ---------------------------------------------------------------
                 
                 m_b = folium.Map(location=locations[0], zoom_start=15)
                 for i in range(len(route_indices) - 1):
