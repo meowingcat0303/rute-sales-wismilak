@@ -18,12 +18,12 @@ def clean_id(val):
     return re.sub(r'[^A-Z0-9]', '', str(val).upper())
 
 # OPTIMASI 1: Amankan penarikan data Google Sheets di memori agar tidak membebani RAM setiap kali klik
-@st.cache_data(ttl=600) # Cache diperbarui otomatis tiap 10 menit
+@st.cache_data(ttl=600)
 def fetch_master_data(url):
     return pd.read_csv(url)
 
 # OPTIMASI 2: Amankan penyimpanan rute jalan agar tidak menembak API OSRM berulang-ulang untuk titik yang sama
-@st.cache_data(ttl=86400) # Menyimpan data rute jalan selama 24 jam
+@st.cache_data(ttl=86400)
 def get_road_geometry(lat1, lon1, lat2, lon2):
     url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
     try:
@@ -33,7 +33,7 @@ def get_road_geometry(lat1, lon1, lat2, lon2):
     except:
         return [[lat1, lon1], [lat2, lon2]]
 
-# OPTIMASI 3: Amankan proses deteksi wilayah OpenStreetMap agar server tidak kelelahan saat data kota membesar
+# OPTIMASI 3: Amankan proses deteksi wilayah OpenStreetMap
 @st.cache_data(ttl=86400)
 def get_location_details(lat, lon):
     url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=18&addressdetails=1"
@@ -56,13 +56,10 @@ def get_batch_gmaps_link(locations_list):
     return f"https://www.google.com/maps/dir/?api=1&origin={start[0]},{start[1]}&waypoints={waypoints}&destination={locations_list[-1][0]},{locations_list[-1][1]}&travelmode=driving"
 
 # ============================================================
-# FITUR BARU: ALGORITMA CLUSTERING (ASUMSI ALTERNATIF DARI GREEDY)
-# Catatan: blok ini HANYA MENAMBAH fungsi baru. Tidak ada satu pun
-# fungsi/baris di atas ini yang diubah.
+# ALGORITMA CLUSTERING (ALTERNATIF DARI GREEDY)
 # ============================================================
 
 def haversine_distance(lat1, lon1, lat2, lon2):
-    """Jarak garis lurus (km) antar 2 titik koordinat, dipakai khusus untuk proses clustering wilayah."""
     R = 6371
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
@@ -71,12 +68,6 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     return 2 * R * math.asin(math.sqrt(min(1, a)))
 
 def simple_kmeans(points, k, max_iter=50):
-    """
-    K-Means ringan tanpa dependency tambahan (cuma pakai math & random bawaan Python),
-    dipakai untuk mengelompokkan toko per wilayah SEBELUM dirutekan.
-    points: list [[lat, lon], ...]
-    Return: list label cluster (0..k-1) sepanjang points
-    """
     n = len(points)
     if n == 0:
         return []
@@ -106,7 +97,6 @@ def simple_kmeans(points, k, max_iter=50):
     return labels
 
 def order_clusters_by_depot_proximity(cluster_centroids, depot_lat, depot_lon):
-    """Urutkan cluster: mulai dari cluster terdekat ke depot, lalu lanjut ke cluster terdekat berikutnya (antar centroid)."""
     n = len(cluster_centroids)
     visited = [False] * n
     order = []
@@ -124,20 +114,6 @@ def order_clusters_by_depot_proximity(cluster_centroids, depot_lat, depot_lon):
     return order
 
 def solve_route_with_clustering(raw_locations, depot_lat, depot_lon, n_clusters=None):
-    """
-    Asumsi alternatif dari Greedy: kelompokkan toko per wilayah (cluster) dulu,
-    urutkan cluster dari yang terdekat ke depot, lalu DI DALAM tiap cluster baru
-    dijalankan Nearest Neighbor (memakai matrix waktu tempuh asli OSRM, sama persis
-    seperti perhitungan di mode Greedy). Tujuannya mengunci kurir di satu wilayah
-    dulu sebelum pindah wilayah, supaya tidak 'melompat' jauh akibat struktur jalan
-    (gang vs jalan utama) seperti dijelaskan pada analisis sebelumnya.
-
-    raw_locations: list [[lat, lon], ...] TANPA depot
-    Return:
-        visit_order : list index (basis raw_locations, 0-based) sesuai urutan kunjungan
-        leg_seconds : list waktu tempuh (detik) per leg perjalanan
-                      (leg pertama = depot->toko pertama, leg terakhir = toko terakhir->depot)
-    """
     n = len(raw_locations)
     if n == 0:
         return [], []
@@ -204,33 +180,10 @@ def solve_route_with_clustering(raw_locations, depot_lat, depot_lon, n_clusters=
     return visit_order, leg_seconds
 
 # ============================================================
-# FITUR BARU: METODE INTEGRASI "CLARKE-WRIGHT DAN INSERTION HEURISTIC"
-# Catatan: blok ini HANYA MENAMBAH fungsi baru. Tidak ada satu pun
-# fungsi/baris di atas ini (termasuk Greedy & Clustering) yang diubah.
-#
-# Tahap 1 - Clarke-Wright Savings: membangun rute dengan terus
-#           menggabungkan dua titik yang memberi "penghematan" jarak/waktu
-#           terbesar bila dikunjungi berurutan, dibanding masing-masing
-#           pulang-pergi sendiri-sendiri ke depot. Ini metode klasik yang
-#           dipakai industri logistik untuk membangun rute awal yang kuat
-#           secara global (bukan rabun-dekat seperti Greedy biasa).
-# Tahap 2 - Insertion Heuristic: Clarke-Wright kadang menyisakan beberapa
-#           "potongan rute" yang belum sempat tersambung jadi satu jalur
-#           utuh. Tahap ini menyisipkan tiap potongan sisa ke posisi yang
-#           paling murah (paling sedikit menambah waktu tempuh) di rute
-#           utama, sehingga akhirnya terbentuk SATU rute utuh.
+# METODE INTEGRASI "CLARKE-WRIGHT DAN INSERTION HEURISTIC"
 # ============================================================
 
 def clarke_wright_savings_route(n, matrix, depot=0):
-    """
-    Algoritma Clarke-Wright Savings klasik (versi parallel), membangun rute
-    awal dari depot ke seluruh customer tanpa batas kapasitas kendaraan.
-    n      : jumlah total titik (termasuk depot)
-    matrix : matrix waktu tempuh (durations) hasil OSRM, ukuran n x n
-    depot  : index depot di dalam matrix (selalu 0 pada aplikasi ini)
-    Return : list segmen rute. Tiap segmen adalah list index customer
-             (TANPA depot), sudah terurut sesuai arah kunjungan di segmen itu.
-    """
     customers = [i for i in range(n) if i != depot]
     if not customers:
         return []
@@ -267,13 +220,6 @@ def clarke_wright_savings_route(n, matrix, depot=0):
     return list(routes.values())
 
 def merge_segments_insertion_heuristic(segments, matrix, depot=0):
-    """
-    Menyatukan beberapa segmen rute sisa hasil Clarke-Wright menjadi satu
-    rute tunggal, dengan cara menyisipkan tiap segmen (dicoba dua arah:
-    normal & terbalik) ke posisi yang menambah waktu tempuh paling kecil
-    di rute dasar (Cheapest Insertion Heuristic). Segmen terpanjang dipakai
-    sebagai rute dasar awal.
-    """
     if not segments:
         return []
     segments_sorted = sorted(segments, key=len, reverse=True)
@@ -298,47 +244,16 @@ def merge_segments_insertion_heuristic(segments, matrix, depot=0):
     return base
 
 def solve_route_clarke_wright_insertion(n, matrix, depot=0):
-    """
-    Metode Integrasi 'Clarke-Wright dan Insertion Heuristic':
-    Tahap 1 - Clarke-Wright Savings membangun rute utama berdasarkan
-              penghematan waktu tempuh terbesar antar titik.
-    Tahap 2 - Jika masih tersisa beberapa segmen terpisah (savings belum
-              berhasil menyatukan semuanya jadi 1 rute), Insertion Heuristic
-              menyisipkan tiap segmen sisa ke posisi termurah di rute utama.
-    Return : list index customer (basis matrix, TANPA depot) sesuai
-             urutan kunjungan final.
-    """
     segments = clarke_wright_savings_route(n, matrix, depot=depot)
     if len(segments) <= 1:
         return segments[0] if segments else []
     return merge_segments_insertion_heuristic(segments, matrix, depot=depot)
 
 # ============================================================
-# FITUR BARU: ANGULAR SWEEP + BRANCH-AND-RETURN + 2-OPT (METODE MODE B BARU)
-# Catatan: blok ini HANYA MENAMBAH fungsi baru. Tidak ada satu pun fungsi
-# di atas ini yang diubah (termasuk Greedy, Clustering, Clarke-Wright -
-# semuanya tetap ada & dipakai utuh oleh Mode D).
-#
-# CATATAN PENTING SOAL KETERBATASAN DATA:
-# Algoritma ini TIDAK memiliki data klasifikasi jalan (mana jalan arteri/
-# jalan besar vs jalan kecil/gang) -- OSRM duration matrix dan koordinat
-# toko saja tidak memuat informasi itu. Karena itu, "penalti menyeberang
-# jalan raya ramai" SENGAJA TIDAK diimplementasikan di sini (lihat
-# penjelasan lengkap di pesan chat). Yang diimplementasikan secara nyata:
-#   1. Angular Sweep   : urutan dasar searah jarum jam dari kantor (bearing).
-#   2. Branch-and-Return: toko yang berdekatan secara fisik (representasi
-#      praktis dari "toko dalam satu gang") dikelompokkan jadi satu BLOK
-#      dan WAJIB dikunjungi sekaligus -- 2-Opt di bawah tidak pernah
-#      memecah isi satu blok, hanya boleh menukar urutan/arah antar blok.
-#   3. Penalti U-turn  : dihitung dari sudut belokan (bearing) antar leg
-#      perjalanan -- belokan mendekati 180 derajat (U-turn) kena penalti
-#      kuadratik, dipakai sebagai bagian dari cost function 2-Opt.
-#   4. 2-Opt (level blok): membersihkan urutan blok agar total durasi +
-#      penalti minimal, tanpa pernah memecah branch yang sudah terbentuk.
+# ANGULAR SWEEP + BRANCH-AND-RETURN + 2-OPT (METODE MODE B BARU)
 # ============================================================
 
 def compute_bearing(lat1, lon1, lat2, lon2):
-    """Sudut kompas (0-360 derajat, searah jarum jam dari Utara) dari titik 1 ke titik 2."""
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dlambda = math.radians(lon2 - lon1)
     x = math.sin(dlambda) * math.cos(phi2)
@@ -347,16 +262,6 @@ def compute_bearing(lat1, lon1, lat2, lon2):
     return (math.degrees(theta) + 360) % 360
 
 def group_branch_clusters(raw_locations, threshold_km=0.15):
-    """
-    Kelompokkan toko yang berdekatan secara fisik jadi satu 'branch/gang'.
-    Memakai aturan COMPLETE-LINKAGE (bukan union-find biasa): sebuah toko
-    hanya boleh gabung ke suatu branch jika jaraknya berada di bawah
-    threshold terhadap SEMUA anggota branch tsb -- ini PENTING untuk
-    mencegah efek 'rantai panjang' (toko A dekat ke B, B dekat ke C, dst,
-    sehingga A dan C jadi dianggap 1 branch padahal sebenarnya jauh).
-    raw_locations: list [[lat, lon], ...] TANPA depot
-    Return: list of list index lokal (0-based, basis raw_locations)
-    """
     n = len(raw_locations)
     branches = []
     for i in range(n):
@@ -372,9 +277,6 @@ def group_branch_clusters(raw_locations, threshold_km=0.15):
     return branches
 
 def order_branch_members(branch_idxs, raw_locations, entry_lat, entry_lon):
-    """Urutkan anggota satu branch (gang) dengan Nearest Neighbor sederhana,
-    dimulai dari anggota terdekat dengan titik masuk (entry_lat, entry_lon),
-    supaya saat masuk gang langsung ke toko terdekat dulu."""
     remaining = list(branch_idxs)
     ordered = []
     cur_lat, cur_lon = entry_lat, entry_lon
@@ -386,15 +288,6 @@ def order_branch_members(branch_idxs, raw_locations, entry_lat, entry_lon):
     return ordered
 
 def build_branch_blocks(raw_locations, depot_lat, depot_lon, branch_threshold_km=0.15):
-    """
-    Tahap 1 (Angular Sweep) + Tahap 2 (Branch-and-Return):
-    Bentuk daftar 'blok' kunjungan -- tiap blok berisi 1 toko tunggal, atau
-    serangkaian toko dalam satu branch/gang yang sudah diurutkan dan WAJIB
-    dikunjungi berurutan tanpa diselingi blok lain. Blok-blok itu sendiri
-    diurutkan berdasarkan sudut (bearing) centroidnya dari kantor, searah
-    jarum jam (0->360 derajat).
-    Return: list of list index lokal (0-based, basis raw_locations)
-    """
     n = len(raw_locations)
     if n == 0:
         return []
@@ -420,8 +313,6 @@ def build_branch_blocks(raw_locations, depot_lat, depot_lon, branch_threshold_km
     return blocks
 
 def expand_blocks_to_route(blocks, depot_idx=0):
-    """Ubah daftar blok (index lokal, basis raw_locations) jadi satu rute
-    utuh (index global di 'locations', depot di posisi 0 dan terakhir)."""
     route = [depot_idx]
     for block in blocks:
         route.extend([m + 1 for m in block])
@@ -429,12 +320,6 @@ def expand_blocks_to_route(blocks, depot_idx=0):
     return route
 
 def route_total_cost_with_turn_penalty(route_indices, matrix, locations, turn_penalty_max=300):
-    """
-    Total biaya rute = total durasi OSRM + penalti belokan tajam.
-    Penalti dihitung dari selisih sudut (bearing) antara leg masuk & leg
-    keluar di tiap titik: belokan lurus (0 derajat) = penalti 0, belokan
-    U-turn (180 derajat) = penalti maksimal (kuadratik, jadi belokan tajam
-    'dihukum' jauh lebih berat daripada belokan ringan/wajar)."""
     total = 0.0
     m = len(route_indices)
     for k in range(m - 1):
@@ -450,18 +335,6 @@ def route_total_cost_with_turn_penalty(route_indices, matrix, locations, turn_pe
     return total
 
 def two_opt_refine_blocks(blocks, matrix, locations, turn_penalty_max=300, max_passes=40, time_budget_seconds=25):
-    """
-    Tahap 3 (Refinement 2-Opt): bersihkan urutan rute dengan menukar/
-    membalik sebagian urutan BLOK (bukan toko individual). Karena yang
-    ditukar adalah BLOK, isi satu branch/gang tidak akan pernah terpecah
-    -- hanya urutan & arah antar blok yang dioptimasi. Ini menjamin pola
-    Angular Sweep yang searah dan logika Branch-and-Return tetap utuh,
-    sambil tetap meminimalkan total durasi + penalti belokan.
-    time_budget_seconds: pengaman agar untuk dataset sangat besar (ratusan
-    toko/blok) proses tetap berhenti dalam waktu wajar, bukan menggantung
-    tanpa batas -- untuk dataset normal (puluhan toko) ini tidak pernah
-    tersentuh karena 2-Opt sudah konvergen jauh lebih cepat dari itu.
-    """
     start_time = time.time()
     blks = [list(b) for b in blocks]
     n = len(blks)
@@ -486,10 +359,6 @@ def two_opt_refine_blocks(blocks, matrix, locations, turn_penalty_max=300, max_p
     return blks
 
 def solve_route_angular_branch_2opt(raw_locations, matrix, locations, depot_lat, depot_lon, branch_threshold_km=0.15, turn_penalty_max=300):
-    """
-    Pipeline lengkap 'satu tombol': Angular Sweep -> Branch-and-Return ->
-    2-Opt (level blok, dengan penalti U-turn). Return: route_indices utuh
-    (index global di 'locations', depot di posisi awal & akhir)."""
     blocks = build_branch_blocks(raw_locations, depot_lat, depot_lon, branch_threshold_km=branch_threshold_km)
     blocks_refined = two_opt_refine_blocks(blocks, matrix, locations, turn_penalty_max=turn_penalty_max)
     return expand_blocks_to_route(blocks_refined, depot_idx=0)
@@ -568,7 +437,6 @@ if source == "Upload Excel":
         df = pd.read_excel(uploaded_file)
 else:
     try:
-        # Menggunakan fungsi ter-cache agar ram hemat dan aman dari penambahan data kota
         df_raw = fetch_master_data(MASTER_SHEET_URL)
         df = df_raw.copy()
         st.sidebar.success("Master Data Terhubung!")
@@ -681,7 +549,7 @@ if df is not None:
                 codes = ["-"] + [(x[kode_col] if has_kode_b else "-") for x in data_combined]
 
                 # ====================================================
-                # METODE: ANGULAR SWEEP + BRANCH-AND-RETURN + 2-OPT
+                # METODE: ANGULAR Sweep + BRANCH-AND-RETURN + 2-OPT
                 # ====================================================
                 coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
                 url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
@@ -733,7 +601,6 @@ if df is not None:
             kec_list, desa_list = [], []
             total_data = len(df_wilayah)
             for i, row in enumerate(df_wilayah.iterrows()):
-                # Menggunakan cache agar proses loading cepat dan andal saat regional data kota padat
                 kec, desa = get_location_details(row[1][lat_col], row[1][lon_col])
                 kec_list.append(kec); desa_list.append(desa)
                 my_bar.progress(int(((i + 1) / total_data) * 100))
@@ -751,7 +618,7 @@ if df is not None:
         st.subheader("📅 Mode D: Jadwal Rute Mingguan Otomatis")
 
         # ============================================================
-        # FITUR BARU: PILIHAN ASUMSI ALGORITMA (DEFAULT TETAP GREEDY)
+        # PILIHAN ASUMSI ALGORITMA
         # ============================================================
         algo_mode_d = st.radio(
             "🧠 Pilih Asumsi Algoritma Rute Harian:",
@@ -789,7 +656,7 @@ if df is not None:
 
                 if algo_mode_d.startswith("Greedy"):
                     # ====================================================
-                    # KODE ASLI - GREEDY NEAREST NEIGHBOR (TIDAK DIUBAH)
+                    # GREEDY NEAREST NEIGHBOR
                     # ====================================================
                     coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
                     url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
@@ -817,7 +684,7 @@ if df is not None:
                         st.error(f"Gagal rute {hari}")
                 elif algo_mode_d.startswith("Clustering"):
                     # ====================================================
-                    # KODE - CLUSTERING WILAYAH DULU, BARU GREEDY PER KLASTER (TIDAK DIUBAH)
+                    # CLUSTERING WILAYAH DULU, BARU GREEDY
                     # ====================================================
                     try:
                         raw_locations_d = locations[1:]
@@ -840,7 +707,7 @@ if df is not None:
                         st.error(f"Gagal rute {hari}")
                 else:
                     # ====================================================
-                    # FITUR BARU - METODE INTEGRASI CLARKE-WRIGHT DAN INSERTION HEURISTIC
+                    # INTEGRASI CLARKE-WRIGHT DAN INSERTION HEURISTIC
                     # ====================================================
                     try:
                         coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
