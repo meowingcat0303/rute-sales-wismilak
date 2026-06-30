@@ -203,6 +203,116 @@ def solve_route_with_clustering(raw_locations, depot_lat, depot_lon, n_clusters=
 
     return visit_order, leg_seconds
 
+# ============================================================
+# FITUR BARU: METODE INTEGRASI "CLARKE-WRIGHT DAN INSERTION HEURISTIC"
+# Catatan: blok ini HANYA MENAMBAH fungsi baru. Tidak ada satu pun
+# fungsi/baris di atas ini (termasuk Greedy & Clustering) yang diubah.
+#
+# Tahap 1 - Clarke-Wright Savings: membangun rute dengan terus
+#           menggabungkan dua titik yang memberi "penghematan" jarak/waktu
+#           terbesar bila dikunjungi berurutan, dibanding masing-masing
+#           pulang-pergi sendiri-sendiri ke depot. Ini metode klasik yang
+#           dipakai industri logistik untuk membangun rute awal yang kuat
+#           secara global (bukan rabun-dekat seperti Greedy biasa).
+# Tahap 2 - Insertion Heuristic: Clarke-Wright kadang menyisakan beberapa
+#           "potongan rute" yang belum sempat tersambung jadi satu jalur
+#           utuh. Tahap ini menyisipkan tiap potongan sisa ke posisi yang
+#           paling murah (paling sedikit menambah waktu tempuh) di rute
+#           utama, sehingga akhirnya terbentuk SATU rute utuh.
+# ============================================================
+
+def clarke_wright_savings_route(n, matrix, depot=0):
+    """
+    Algoritma Clarke-Wright Savings klasik (versi parallel), membangun rute
+    awal dari depot ke seluruh customer tanpa batas kapasitas kendaraan.
+    n      : jumlah total titik (termasuk depot)
+    matrix : matrix waktu tempuh (durations) hasil OSRM, ukuran n x n
+    depot  : index depot di dalam matrix (selalu 0 pada aplikasi ini)
+    Return : list segmen rute. Tiap segmen adalah list index customer
+             (TANPA depot), sudah terurut sesuai arah kunjungan di segmen itu.
+    """
+    customers = [i for i in range(n) if i != depot]
+    if not customers:
+        return []
+    routes = {c: [c] for c in customers}
+    route_of = {c: c for c in customers}
+
+    savings = []
+    for a in range(len(customers)):
+        for b in range(a + 1, len(customers)):
+            i, j = customers[a], customers[b]
+            s = matrix[depot][i] + matrix[depot][j] - matrix[i][j]
+            savings.append((s, i, j))
+    savings.sort(key=lambda x: -x[0])
+
+    for s, i, j in savings:
+        ri, rj = route_of.get(i), route_of.get(j)
+        if ri is None or rj is None or ri == rj:
+            continue
+        route_i, route_j = routes[ri], routes[rj]
+        if i not in (route_i[0], route_i[-1]):
+            continue
+        if j not in (route_j[0], route_j[-1]):
+            continue
+        if route_i[0] == i:
+            route_i = route_i[::-1]
+        if route_j[-1] == j:
+            route_j = route_j[::-1]
+        merged = route_i + route_j
+        routes[ri] = merged
+        del routes[rj]
+        for node in merged:
+            route_of[node] = ri
+
+    return list(routes.values())
+
+def merge_segments_insertion_heuristic(segments, matrix, depot=0):
+    """
+    Menyatukan beberapa segmen rute sisa hasil Clarke-Wright menjadi satu
+    rute tunggal, dengan cara menyisipkan tiap segmen (dicoba dua arah:
+    normal & terbalik) ke posisi yang menambah waktu tempuh paling kecil
+    di rute dasar (Cheapest Insertion Heuristic). Segmen terpanjang dipakai
+    sebagai rute dasar awal.
+    """
+    if not segments:
+        return []
+    segments_sorted = sorted(segments, key=len, reverse=True)
+    base = list(segments_sorted[0])
+
+    for seg in segments_sorted[1:]:
+        best_delta, best_pos, best_seg = None, None, None
+        for seg_try in (seg, list(reversed(seg))):
+            extended = [depot] + base + [depot]
+            for pos in range(len(extended) - 1):
+                a, b = extended[pos], extended[pos + 1]
+                original = matrix[a][b]
+                inserted = matrix[a][seg_try[0]]
+                for k in range(len(seg_try) - 1):
+                    inserted += matrix[seg_try[k]][seg_try[k + 1]]
+                inserted += matrix[seg_try[-1]][b]
+                delta = inserted - original
+                if best_delta is None or delta < best_delta:
+                    best_delta, best_pos, best_seg = delta, pos, seg_try
+        base = base[:best_pos] + best_seg + base[best_pos:]
+
+    return base
+
+def solve_route_clarke_wright_insertion(n, matrix, depot=0):
+    """
+    Metode Integrasi 'Clarke-Wright dan Insertion Heuristic':
+    Tahap 1 - Clarke-Wright Savings membangun rute utama berdasarkan
+              penghematan waktu tempuh terbesar antar titik.
+    Tahap 2 - Jika masih tersisa beberapa segmen terpisah (savings belum
+              berhasil menyatukan semuanya jadi 1 rute), Insertion Heuristic
+              menyisipkan tiap segmen sisa ke posisi termurah di rute utama.
+    Return : list index customer (basis matrix, TANPA depot) sesuai
+             urutan kunjungan final.
+    """
+    segments = clarke_wright_savings_route(n, matrix, depot=depot)
+    if len(segments) <= 1:
+        return segments[0] if segments else []
+    return merge_segments_insertion_heuristic(segments, matrix, depot=depot)
+
 # --- FUNGSI PDF MODE A ---
 def generate_pdf(df):
     pdf = FPDF()
@@ -369,17 +479,19 @@ if df is not None:
         # ============================================================
         algo_mode_b = st.radio(
             "🧠 Pilih Asumsi Algoritma Rute:",
-            ["Greedy (Default - Titik Terdekat)", "Clustering (Kelompokkan Wilayah Dulu)"],
+            ["Greedy (Default - Titik Terdekat)", "Clustering (Kelompokkan Wilayah Dulu)", "Integrasi Clarke-Wright dan Insertion Heuristic"],
             horizontal=True,
             key="algo_choice_mode_b",
-            help="Greedy: mesin selalu memilih toko terdekat dari posisi sekarang (cepat, tapi bisa 'melompat' keluar-masuk wilayah karena struktur jalan). Clustering: toko dikelompokkan per wilayah dulu, RTS menyelesaikan satu wilayah sebelum pindah ke wilayah lain (mencegah lompat jauh, total waktu bisa sedikit berbeda)."
+            help="Greedy: mesin selalu memilih toko terdekat dari posisi sekarang (cepat, tapi bisa 'melompat' keluar-masuk wilayah karena struktur jalan). Clustering: toko dikelompokkan per wilayah dulu, RTS menyelesaikan satu wilayah sebelum pindah ke wilayah lain (mencegah lompat jauh, total waktu bisa sedikit berbeda). Integrasi Clarke-Wright & Insertion Heuristic: membangun rute berdasarkan 'penghematan' waktu tempuh terbesar antar titik secara global (Clarke-Wright), lalu menyatukan sisa potongan rute ke posisi termurah (Insertion Heuristic) — satu kali klik, tanpa perlu mengatur jumlah cluster."
         )
         n_cluster_input_b = None
-        if not algo_mode_b.startswith("Greedy"):
+        if algo_mode_b.startswith("Clustering"):
             n_cluster_input_b = st.number_input(
                 "Jumlah Kelompok Wilayah (Cluster):", min_value=0, value=0, step=1,
                 help="Isi 0 untuk otomatis (kira-kira 1 cluster per 10 toko)."
             )
+        elif algo_mode_b.startswith("Integrasi"):
+            st.caption("Metode Integrasi Clarke-Wright & Insertion Heuristic: rute dibangun dari penghematan waktu tempuh terbesar antar titik (bukan rabun-dekat seperti Greedy), lalu sisa potongan rute disatukan di posisi termurah. Tidak perlu mengatur jumlah cluster.")
 
         if st.button("Jalankan Optimasi"):
             with st.spinner('Menghitung Rute Realistis...'):
@@ -423,9 +535,9 @@ if df is not None:
                             "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
                         })
                     df_mode_b = pd.DataFrame(table_data)
-                else:
+                elif algo_mode_b.startswith("Clustering"):
                     # ====================================================
-                    # KODE BARU - CLUSTERING WILAYAH DULU, BARU GREEDY PER KLASTER
+                    # KODE - CLUSTERING WILAYAH DULU, BARU GREEDY PER KLASTER (TIDAK DIUBAH)
                     # ====================================================
                     raw_locations_b = locations[1:]
                     n_cluster_b = int(n_cluster_input_b) if n_cluster_input_b else max(1, round(len(raw_locations_b) / 10))
@@ -444,10 +556,29 @@ if df is not None:
                             "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
                         })
                     df_mode_b = pd.DataFrame(table_data)
+                else:
+                    # ====================================================
+                    # FITUR BARU - METODE INTEGRASI CLARKE-WRIGHT DAN INSERTION HEURISTIC
+                    # ====================================================
+                    coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
+                    url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
+                    data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
+                    matrix = data['durations']
 
-                # ========================================================
-                # KODE ASLI DI BAWAH INI TETAP SAMA UNTUK SEMUA MODE (TIDAK DIUBAH)
-                # ========================================================
+                    visit_order_cw = solve_route_clarke_wright_insertion(len(locations), matrix, depot=0)
+                    route_indices = [0] + visit_order_cw + [0]
+                    total_seconds = sum(matrix[route_indices[i]][route_indices[i+1]] for i in range(len(route_indices) - 1))
+
+                    table_data = []
+                    for i in range(len(route_indices) - 1):
+                        curr, next_n = route_indices[i], route_indices[i+1]
+                        table_data.append({
+                            "Checklist": False, "Kode Customer": codes[next_n], "No": i + 1, "Dari": names[curr], "Ke": names[next_n],
+                            "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2),
+                            "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
+                            "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
+                        })
+                    df_mode_b = pd.DataFrame(table_data)
                 st.data_editor(df_mode_b, column_config={"Navigasi A->B": st.column_config.LinkColumn("Navigasi", display_text="🗺️ Cek Rute"), "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")}, width='stretch', hide_index=True)
                 st.metric("Total Waktu", f"{int(total_seconds//3600)} Jam {int((total_seconds%3600)//60)} Menit")
                 
@@ -496,17 +627,19 @@ if df is not None:
         # ============================================================
         algo_mode_d = st.radio(
             "🧠 Pilih Asumsi Algoritma Rute Harian:",
-            ["Greedy (Default - Titik Terdekat)", "Clustering (Kelompokkan Wilayah Dulu)"],
+            ["Greedy (Default - Titik Terdekat)", "Clustering (Kelompokkan Wilayah Dulu)", "Integrasi Clarke-Wright dan Insertion Heuristic"],
             horizontal=True,
             key="algo_choice_mode_d",
-            help="Greedy: rute tiap hari dihitung murni titik terdekat berikutnya. Clustering: toko dalam satu hari dikelompokkan per wilayah kecil dulu, kurir menyelesaikan satu wilayah sebelum pindah, agar tidak 'melompat' antar gang."
+            help="Greedy: rute tiap hari dihitung murni titik terdekat berikutnya. Clustering: toko dalam satu hari dikelompokkan per wilayah kecil dulu, kurir menyelesaikan satu wilayah sebelum pindah, agar tidak 'melompat' antar gang. Integrasi Clarke-Wright & Insertion Heuristic: rute harian dibangun dari penghematan waktu tempuh terbesar antar titik, lalu sisa potongan rute disatukan di posisi termurah."
         )
         n_cluster_input_d = None
-        if not algo_mode_d.startswith("Greedy"):
+        if algo_mode_d.startswith("Clustering"):
             n_cluster_input_d = st.number_input(
                 "Jumlah Kelompok Wilayah per Hari (Cluster):", min_value=0, value=0, step=1,
                 help="Isi 0 untuk otomatis (kira-kira 1 cluster per 8 toko per hari)."
             )
+        elif algo_mode_d.startswith("Integrasi"):
+            st.caption("Metode Integrasi Clarke-Wright & Insertion Heuristic: rute tiap hari dibangun dari penghematan waktu tempuh terbesar antar titik, lalu sisa potongan rute disatukan di posisi termurah. Tidak perlu mengatur jumlah cluster.")
 
         s = [st.number_input(h, min_value=0, value=40) for h in ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]]
         if st.button("Generate Jadwal Mingguan"):
@@ -554,9 +687,9 @@ if df is not None:
                         jadwal_final[hari] = pd.DataFrame(table_data)
                     except:
                         st.error(f"Gagal rute {hari}")
-                else:
+                elif algo_mode_d.startswith("Clustering"):
                     # ====================================================
-                    # KODE BARU - CLUSTERING WILAYAH DULU, BARU GREEDY PER KLASTER
+                    # KODE - CLUSTERING WILAYAH DULU, BARU GREEDY PER KLASTER (TIDAK DIUBAH)
                     # ====================================================
                     try:
                         raw_locations_d = locations[1:]
@@ -574,6 +707,29 @@ if df is not None:
                                 "Navigasi A->B": get_single_leg_link(prev_lat, prev_lon, cur_lat, cur_lon)
                             })
                             prev_lat, prev_lon = cur_lat, cur_lon
+                        jadwal_final[hari] = pd.DataFrame(table_data)
+                    except:
+                        st.error(f"Gagal rute {hari}")
+                else:
+                    # ====================================================
+                    # FITUR BARU - METODE INTEGRASI CLARKE-WRIGHT DAN INSERTION HEURISTIC
+                    # ====================================================
+                    try:
+                        coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
+                        url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
+                        res_data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
+                        matrix = res_data['durations']
+
+                        visit_order_cw_d = solve_route_clarke_wright_insertion(len(locations), matrix, depot=0)
+                        route_indices = [0] + visit_order_cw_d + [0]
+
+                        table_data = []
+                        for k in range(len(route_indices) - 1):
+                            curr, next_n = route_indices[k], route_indices[k+1]
+                            table_data.append({
+                                "Hari": hari, "Urutan": k + 1, "Kode Customer": codes[next_n], "Toko": names[next_n],
+                                "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2), "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1])
+                            })
                         jadwal_final[hari] = pd.DataFrame(table_data)
                     except:
                         st.error(f"Gagal rute {hari}")
