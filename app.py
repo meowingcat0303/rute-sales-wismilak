@@ -250,118 +250,37 @@ def solve_route_clarke_wright_insertion(n, matrix, depot=0):
     return merge_segments_insertion_heuristic(segments, matrix, depot=depot)
 
 # ============================================================
-# ANGULAR SWEEP + BRANCH-AND-RETURN + 2-OPT (METODE MODE B BARU)
+# METODE MURNI: ANGULAR SWEEP (TEORI CLOVERLEAF UNTUK MODE B)
 # ============================================================
 
-def compute_bearing(lat1, lon1, lat2, lon2):
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dlambda = math.radians(lon2 - lon1)
-    x = math.sin(dlambda) * math.cos(phi2)
-    y = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlambda)
-    theta = math.atan2(x, y)
-    return (math.degrees(theta) + 360) % 360
+def compute_angle(lat, lon, depot_lat, depot_lon):
+    """
+    Menghitung sudut (angle) titik terhadap depot menggunakan atan2.
+    Hasilnya berupa radian, digunakan untuk mengurutkan titik secara melingkar.
+    """
+    return math.atan2(lon - depot_lon, lat - depot_lat)
 
-def group_branch_clusters(raw_locations, threshold_km=0.15):
-    n = len(raw_locations)
-    branches = []
-    for i in range(n):
-        target = None
-        for branch in branches:
-            if all(haversine_distance(raw_locations[i][0], raw_locations[i][1], raw_locations[m][0], raw_locations[m][1]) <= threshold_km for m in branch):
-                target = branch
-                break
-        if target is not None:
-            target.append(i)
-        else:
-            branches.append([i])
-    return branches
-
-def order_branch_members(branch_idxs, raw_locations, entry_lat, entry_lon):
-    remaining = list(branch_idxs)
-    ordered = []
-    cur_lat, cur_lon = entry_lat, entry_lon
-    while remaining:
-        best = min(remaining, key=lambda idx: haversine_distance(cur_lat, cur_lon, raw_locations[idx][0], raw_locations[idx][1]))
-        ordered.append(best)
-        cur_lat, cur_lon = raw_locations[best][0], raw_locations[best][1]
-        remaining.remove(best)
-    return ordered
-
-def build_branch_blocks(raw_locations, depot_lat, depot_lon, branch_threshold_km=0.15):
+def solve_route_pure_angular_sweep(raw_locations, depot_lat, depot_lon):
+    """
+    Mengurutkan toko murni berdasarkan sapuan sudut (Angular Sweep).
+    Pola ini akan menghasilkan rute melingkar seperti kelopak (Cloverleaf) 
+    sesuai teori manual Salesman.
+    """
     n = len(raw_locations)
     if n == 0:
         return []
-    branches = group_branch_clusters(raw_locations, threshold_km=branch_threshold_km)
-    branch_info = []
-    for members in branches:
-        clat = sum(raw_locations[i][0] for i in members) / len(members)
-        clon = sum(raw_locations[i][1] for i in members) / len(members)
-        bearing = compute_bearing(depot_lat, depot_lon, clat, clon)
-        branch_info.append({"members": members, "bearing": bearing})
-    branch_info.sort(key=lambda b: b["bearing"])
 
-    blocks = []
-    cur_lat, cur_lon = depot_lat, depot_lon
-    for b in branch_info:
-        if len(b["members"]) == 1:
-            blocks.append([b["members"][0]])
-            cur_lat, cur_lon = raw_locations[b["members"][0]][0], raw_locations[b["members"][0]][1]
-        else:
-            ordered = order_branch_members(b["members"], raw_locations, cur_lat, cur_lon)
-            blocks.append(ordered)
-            cur_lat, cur_lon = raw_locations[ordered[-1]][0], raw_locations[ordered[-1]][1]
-    return blocks
+    points = []
+    for i in range(n):
+        angle = compute_angle(raw_locations[i][0], raw_locations[i][1], depot_lat, depot_lon)
+        points.append({"index": i, "angle": angle})
 
-def expand_blocks_to_route(blocks, depot_idx=0):
-    route = [depot_idx]
-    for block in blocks:
-        route.extend([m + 1 for m in block])
-    route.append(depot_idx)
+    # Urutkan titik berdasarkan putaran sudut
+    points.sort(key=lambda x: x["angle"])
+
+    # Susun rute: mulai dari depot (0), kunjungi titik searah putaran, kembali ke depot (0)
+    route = [0] + [p["index"] + 1 for p in points] + [0]
     return route
-
-def route_total_cost_with_turn_penalty(route_indices, matrix, locations, turn_penalty_max=300):
-    total = 0.0
-    m = len(route_indices)
-    for k in range(m - 1):
-        total += matrix[route_indices[k]][route_indices[k + 1]]
-    for k in range(1, m - 1):
-        a, b, c = route_indices[k - 1], route_indices[k], route_indices[k + 1]
-        bearing_in = compute_bearing(locations[a][0], locations[a][1], locations[b][0], locations[b][1])
-        bearing_out = compute_bearing(locations[b][0], locations[b][1], locations[c][0], locations[c][1])
-        diff = abs(bearing_out - bearing_in)
-        if diff > 180:
-            diff = 360 - diff
-        total += turn_penalty_max * (diff / 180) ** 2
-    return total
-
-def two_opt_refine_blocks(blocks, matrix, locations, turn_penalty_max=300, max_passes=40, time_budget_seconds=25):
-    start_time = time.time()
-    blks = [list(b) for b in blocks]
-    n = len(blks)
-    improved = True
-    passes = 0
-    while improved and passes < max_passes:
-        if time.time() - start_time > time_budget_seconds:
-            break
-        improved = False
-        passes += 1
-        base_cost = route_total_cost_with_turn_penalty(expand_blocks_to_route(blks), matrix, locations, turn_penalty_max)
-        for i in range(n):
-            for j in range(i + 1, n):
-                new_blks = blks[:i] + [list(reversed(b)) for b in reversed(blks[i:j + 1])] + blks[j + 1:]
-                new_cost = route_total_cost_with_turn_penalty(expand_blocks_to_route(new_blks), matrix, locations, turn_penalty_max)
-                if new_cost < base_cost - 1e-6:
-                    blks = new_blks
-                    base_cost = new_cost
-                    improved = True
-            if time.time() - start_time > time_budget_seconds:
-                break
-    return blks
-
-def solve_route_angular_branch_2opt(raw_locations, matrix, locations, depot_lat, depot_lon, branch_threshold_km=0.15, turn_penalty_max=300):
-    blocks = build_branch_blocks(raw_locations, depot_lat, depot_lon, branch_threshold_km=branch_threshold_km)
-    blocks_refined = two_opt_refine_blocks(blocks, matrix, locations, turn_penalty_max=turn_penalty_max)
-    return expand_blocks_to_route(blocks_refined, depot_idx=0)
 
 # --- FUNGSI PDF MODE A ---
 def generate_pdf(df):
@@ -522,18 +441,7 @@ if df is not None:
 
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
-        st.caption("Metode: Angular Sweep + Branch-and-Return + 2-Opt (dengan penalti belokan U-turn). Rute disusun searah jarum jam dari kantor, toko yang berdekatan (satu gang) diselesaikan sekaligus sebelum lanjut, lalu dirapikan dengan 2-Opt tanpa memecah gang yang sudah terbentuk.")
-
-        with st.expander("⚙️ Pengaturan Lanjutan (opsional)"):
-            branch_threshold_m = st.number_input(
-                "Radius Branch/Gang (meter):", min_value=20, max_value=1000, value=150, step=10,
-                help="Toko yang jaraknya di bawah radius ini dianggap satu gang/cabang dan WAJIB dikunjungi berurutan tanpa diselingi toko lain. Perbesar jika toko dalam satu gang masih sering dianggap terpisah; perkecil jika toko di jalan utama yang berbeda malah tergabung jadi satu gang."
-            )
-            turn_penalty_input = st.number_input(
-                "Bobot Penalti U-Turn (menit):", min_value=0, max_value=30, value=5, step=1,
-                help="Seberapa besar 'denda waktu' untuk belokan tajam mendekati 180 derajat (U-turn). Makin besar nilainya, makin kuat algoritma menghindari rute yang bolak-balik arah."
-            )
-            st.caption("Catatan: penalti 'menyeberang jalan raya besar yang ramai' belum bisa diimplementasikan karena data koordinat & waktu tempuh OSRM tidak memuat info klasifikasi jalan (mana jalan arteri vs jalan kecil).")
+        st.caption("Metode: Murni Angular Sweep (Cloverleaf). Rute disusun secara melingkar berdasarkan sapuan sudut dari kantor, sangat ringan dan sesuai dengan pola manual Salesman.")
 
         if st.button("Jalankan Optimasi"):
             with st.spinner('Menghitung Rute Realistis...'):
@@ -549,7 +457,7 @@ if df is not None:
                 codes = ["-"] + [(x[kode_col] if has_kode_b else "-") for x in data_combined]
 
                 # ====================================================
-                # METODE: ANGULAR Sweep + BRANCH-AND-RETURN + 2-OPT
+                # METODE: MURNI ANGULAR SWEEP
                 # ====================================================
                 coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
                 url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
@@ -557,11 +465,9 @@ if df is not None:
                 matrix = data['durations']
 
                 raw_locations_b = locations[1:]
-                route_indices = solve_route_angular_branch_2opt(
-                    raw_locations_b, matrix, locations, depot_lat, depot_lon,
-                    branch_threshold_km=branch_threshold_m / 1000,
-                    turn_penalty_max=turn_penalty_input * 60
-                )
+                
+                route_indices = solve_route_pure_angular_sweep(raw_locations_b, depot_lat, depot_lon)
+                
                 total_seconds = sum(matrix[route_indices[i]][route_indices[i+1]] for i in range(len(route_indices) - 1))
 
                 table_data = []
