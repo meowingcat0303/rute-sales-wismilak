@@ -313,6 +313,187 @@ def solve_route_clarke_wright_insertion(n, matrix, depot=0):
         return segments[0] if segments else []
     return merge_segments_insertion_heuristic(segments, matrix, depot=depot)
 
+# ============================================================
+# FITUR BARU: ANGULAR SWEEP + BRANCH-AND-RETURN + 2-OPT (METODE MODE B BARU)
+# Catatan: blok ini HANYA MENAMBAH fungsi baru. Tidak ada satu pun fungsi
+# di atas ini yang diubah (termasuk Greedy, Clustering, Clarke-Wright -
+# semuanya tetap ada & dipakai utuh oleh Mode D).
+#
+# CATATAN PENTING SOAL KETERBATASAN DATA:
+# Algoritma ini TIDAK memiliki data klasifikasi jalan (mana jalan arteri/
+# jalan besar vs jalan kecil/gang) -- OSRM duration matrix dan koordinat
+# toko saja tidak memuat informasi itu. Karena itu, "penalti menyeberang
+# jalan raya ramai" SENGAJA TIDAK diimplementasikan di sini (lihat
+# penjelasan lengkap di pesan chat). Yang diimplementasikan secara nyata:
+#   1. Angular Sweep   : urutan dasar searah jarum jam dari kantor (bearing).
+#   2. Branch-and-Return: toko yang berdekatan secara fisik (representasi
+#      praktis dari "toko dalam satu gang") dikelompokkan jadi satu BLOK
+#      dan WAJIB dikunjungi sekaligus -- 2-Opt di bawah tidak pernah
+#      memecah isi satu blok, hanya boleh menukar urutan/arah antar blok.
+#   3. Penalti U-turn  : dihitung dari sudut belokan (bearing) antar leg
+#      perjalanan -- belokan mendekati 180 derajat (U-turn) kena penalti
+#      kuadratik, dipakai sebagai bagian dari cost function 2-Opt.
+#   4. 2-Opt (level blok): membersihkan urutan blok agar total durasi +
+#      penalti minimal, tanpa pernah memecah branch yang sudah terbentuk.
+# ============================================================
+
+def compute_bearing(lat1, lon1, lat2, lon2):
+    """Sudut kompas (0-360 derajat, searah jarum jam dari Utara) dari titik 1 ke titik 2."""
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dlambda = math.radians(lon2 - lon1)
+    x = math.sin(dlambda) * math.cos(phi2)
+    y = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlambda)
+    theta = math.atan2(x, y)
+    return (math.degrees(theta) + 360) % 360
+
+def group_branch_clusters(raw_locations, threshold_km=0.15):
+    """
+    Kelompokkan toko yang berdekatan secara fisik jadi satu 'branch/gang'.
+    Memakai aturan COMPLETE-LINKAGE (bukan union-find biasa): sebuah toko
+    hanya boleh gabung ke suatu branch jika jaraknya berada di bawah
+    threshold terhadap SEMUA anggota branch tsb -- ini PENTING untuk
+    mencegah efek 'rantai panjang' (toko A dekat ke B, B dekat ke C, dst,
+    sehingga A dan C jadi dianggap 1 branch padahal sebenarnya jauh).
+    raw_locations: list [[lat, lon], ...] TANPA depot
+    Return: list of list index lokal (0-based, basis raw_locations)
+    """
+    n = len(raw_locations)
+    branches = []
+    for i in range(n):
+        target = None
+        for branch in branches:
+            if all(haversine_distance(raw_locations[i][0], raw_locations[i][1], raw_locations[m][0], raw_locations[m][1]) <= threshold_km for m in branch):
+                target = branch
+                break
+        if target is not None:
+            target.append(i)
+        else:
+            branches.append([i])
+    return branches
+
+def order_branch_members(branch_idxs, raw_locations, entry_lat, entry_lon):
+    """Urutkan anggota satu branch (gang) dengan Nearest Neighbor sederhana,
+    dimulai dari anggota terdekat dengan titik masuk (entry_lat, entry_lon),
+    supaya saat masuk gang langsung ke toko terdekat dulu."""
+    remaining = list(branch_idxs)
+    ordered = []
+    cur_lat, cur_lon = entry_lat, entry_lon
+    while remaining:
+        best = min(remaining, key=lambda idx: haversine_distance(cur_lat, cur_lon, raw_locations[idx][0], raw_locations[idx][1]))
+        ordered.append(best)
+        cur_lat, cur_lon = raw_locations[best][0], raw_locations[best][1]
+        remaining.remove(best)
+    return ordered
+
+def build_branch_blocks(raw_locations, depot_lat, depot_lon, branch_threshold_km=0.15):
+    """
+    Tahap 1 (Angular Sweep) + Tahap 2 (Branch-and-Return):
+    Bentuk daftar 'blok' kunjungan -- tiap blok berisi 1 toko tunggal, atau
+    serangkaian toko dalam satu branch/gang yang sudah diurutkan dan WAJIB
+    dikunjungi berurutan tanpa diselingi blok lain. Blok-blok itu sendiri
+    diurutkan berdasarkan sudut (bearing) centroidnya dari kantor, searah
+    jarum jam (0->360 derajat).
+    Return: list of list index lokal (0-based, basis raw_locations)
+    """
+    n = len(raw_locations)
+    if n == 0:
+        return []
+    branches = group_branch_clusters(raw_locations, threshold_km=branch_threshold_km)
+    branch_info = []
+    for members in branches:
+        clat = sum(raw_locations[i][0] for i in members) / len(members)
+        clon = sum(raw_locations[i][1] for i in members) / len(members)
+        bearing = compute_bearing(depot_lat, depot_lon, clat, clon)
+        branch_info.append({"members": members, "bearing": bearing})
+    branch_info.sort(key=lambda b: b["bearing"])
+
+    blocks = []
+    cur_lat, cur_lon = depot_lat, depot_lon
+    for b in branch_info:
+        if len(b["members"]) == 1:
+            blocks.append([b["members"][0]])
+            cur_lat, cur_lon = raw_locations[b["members"][0]][0], raw_locations[b["members"][0]][1]
+        else:
+            ordered = order_branch_members(b["members"], raw_locations, cur_lat, cur_lon)
+            blocks.append(ordered)
+            cur_lat, cur_lon = raw_locations[ordered[-1]][0], raw_locations[ordered[-1]][1]
+    return blocks
+
+def expand_blocks_to_route(blocks, depot_idx=0):
+    """Ubah daftar blok (index lokal, basis raw_locations) jadi satu rute
+    utuh (index global di 'locations', depot di posisi 0 dan terakhir)."""
+    route = [depot_idx]
+    for block in blocks:
+        route.extend([m + 1 for m in block])
+    route.append(depot_idx)
+    return route
+
+def route_total_cost_with_turn_penalty(route_indices, matrix, locations, turn_penalty_max=300):
+    """
+    Total biaya rute = total durasi OSRM + penalti belokan tajam.
+    Penalti dihitung dari selisih sudut (bearing) antara leg masuk & leg
+    keluar di tiap titik: belokan lurus (0 derajat) = penalti 0, belokan
+    U-turn (180 derajat) = penalti maksimal (kuadratik, jadi belokan tajam
+    'dihukum' jauh lebih berat daripada belokan ringan/wajar)."""
+    total = 0.0
+    m = len(route_indices)
+    for k in range(m - 1):
+        total += matrix[route_indices[k]][route_indices[k + 1]]
+    for k in range(1, m - 1):
+        a, b, c = route_indices[k - 1], route_indices[k], route_indices[k + 1]
+        bearing_in = compute_bearing(locations[a][0], locations[a][1], locations[b][0], locations[b][1])
+        bearing_out = compute_bearing(locations[b][0], locations[b][1], locations[c][0], locations[c][1])
+        diff = abs(bearing_out - bearing_in)
+        if diff > 180:
+            diff = 360 - diff
+        total += turn_penalty_max * (diff / 180) ** 2
+    return total
+
+def two_opt_refine_blocks(blocks, matrix, locations, turn_penalty_max=300, max_passes=40, time_budget_seconds=25):
+    """
+    Tahap 3 (Refinement 2-Opt): bersihkan urutan rute dengan menukar/
+    membalik sebagian urutan BLOK (bukan toko individual). Karena yang
+    ditukar adalah BLOK, isi satu branch/gang tidak akan pernah terpecah
+    -- hanya urutan & arah antar blok yang dioptimasi. Ini menjamin pola
+    Angular Sweep yang searah dan logika Branch-and-Return tetap utuh,
+    sambil tetap meminimalkan total durasi + penalti belokan.
+    time_budget_seconds: pengaman agar untuk dataset sangat besar (ratusan
+    toko/blok) proses tetap berhenti dalam waktu wajar, bukan menggantung
+    tanpa batas -- untuk dataset normal (puluhan toko) ini tidak pernah
+    tersentuh karena 2-Opt sudah konvergen jauh lebih cepat dari itu.
+    """
+    start_time = time.time()
+    blks = [list(b) for b in blocks]
+    n = len(blks)
+    improved = True
+    passes = 0
+    while improved and passes < max_passes:
+        if time.time() - start_time > time_budget_seconds:
+            break
+        improved = False
+        passes += 1
+        base_cost = route_total_cost_with_turn_penalty(expand_blocks_to_route(blks), matrix, locations, turn_penalty_max)
+        for i in range(n):
+            for j in range(i + 1, n):
+                new_blks = blks[:i] + [list(reversed(b)) for b in reversed(blks[i:j + 1])] + blks[j + 1:]
+                new_cost = route_total_cost_with_turn_penalty(expand_blocks_to_route(new_blks), matrix, locations, turn_penalty_max)
+                if new_cost < base_cost - 1e-6:
+                    blks = new_blks
+                    base_cost = new_cost
+                    improved = True
+            if time.time() - start_time > time_budget_seconds:
+                break
+    return blks
+
+def solve_route_angular_branch_2opt(raw_locations, matrix, locations, depot_lat, depot_lon, branch_threshold_km=0.15, turn_penalty_max=300):
+    """
+    Pipeline lengkap 'satu tombol': Angular Sweep -> Branch-and-Return ->
+    2-Opt (level blok, dengan penalti U-turn). Return: route_indices utuh
+    (index global di 'locations', depot di posisi awal & akhir)."""
+    blocks = build_branch_blocks(raw_locations, depot_lat, depot_lon, branch_threshold_km=branch_threshold_km)
+    blocks_refined = two_opt_refine_blocks(blocks, matrix, locations, turn_penalty_max=turn_penalty_max)
+    return expand_blocks_to_route(blocks_refined, depot_idx=0)
+
 # --- FUNGSI PDF MODE A ---
 def generate_pdf(df):
     pdf = FPDF()
@@ -473,25 +654,18 @@ if df is not None:
 
     with tab2:
         st.subheader("Mode B: Optimasi Rute")
+        st.caption("Metode: Angular Sweep + Branch-and-Return + 2-Opt (dengan penalti belokan U-turn). Rute disusun searah jarum jam dari kantor, toko yang berdekatan (satu gang) diselesaikan sekaligus sebelum lanjut, lalu dirapikan dengan 2-Opt tanpa memecah gang yang sudah terbentuk.")
 
-        # ============================================================
-        # FITUR BARU: PILIHAN ASUMSI ALGORITMA (DEFAULT TETAP GREEDY)
-        # ============================================================
-        algo_mode_b = st.radio(
-            "🧠 Pilih Asumsi Algoritma Rute:",
-            ["Greedy (Default - Titik Terdekat)", "Clustering (Kelompokkan Wilayah Dulu)", "Integrasi Clarke-Wright dan Insertion Heuristic"],
-            horizontal=True,
-            key="algo_choice_mode_b",
-            help="Greedy: mesin selalu memilih toko terdekat dari posisi sekarang (cepat, tapi bisa 'melompat' keluar-masuk wilayah karena struktur jalan). Clustering: toko dikelompokkan per wilayah dulu, RTS menyelesaikan satu wilayah sebelum pindah ke wilayah lain (mencegah lompat jauh, total waktu bisa sedikit berbeda). Integrasi Clarke-Wright & Insertion Heuristic: membangun rute berdasarkan 'penghematan' waktu tempuh terbesar antar titik secara global (Clarke-Wright), lalu menyatukan sisa potongan rute ke posisi termurah (Insertion Heuristic) — satu kali klik, tanpa perlu mengatur jumlah cluster."
-        )
-        n_cluster_input_b = None
-        if algo_mode_b.startswith("Clustering"):
-            n_cluster_input_b = st.number_input(
-                "Jumlah Kelompok Wilayah (Cluster):", min_value=0, value=0, step=1,
-                help="Isi 0 untuk otomatis (kira-kira 1 cluster per 10 toko)."
+        with st.expander("⚙️ Pengaturan Lanjutan (opsional)"):
+            branch_threshold_m = st.number_input(
+                "Radius Branch/Gang (meter):", min_value=20, max_value=1000, value=150, step=10,
+                help="Toko yang jaraknya di bawah radius ini dianggap satu gang/cabang dan WAJIB dikunjungi berurutan tanpa diselingi toko lain. Perbesar jika toko dalam satu gang masih sering dianggap terpisah; perkecil jika toko di jalan utama yang berbeda malah tergabung jadi satu gang."
             )
-        elif algo_mode_b.startswith("Integrasi"):
-            st.caption("Metode Integrasi Clarke-Wright & Insertion Heuristic: rute dibangun dari penghematan waktu tempuh terbesar antar titik (bukan rabun-dekat seperti Greedy), lalu sisa potongan rute disatukan di posisi termurah. Tidak perlu mengatur jumlah cluster.")
+            turn_penalty_input = st.number_input(
+                "Bobot Penalti U-Turn (menit):", min_value=0, max_value=30, value=5, step=1,
+                help="Seberapa besar 'denda waktu' untuk belokan tajam mendekati 180 derajat (U-turn). Makin besar nilainya, makin kuat algoritma menghindari rute yang bolak-balik arah."
+            )
+            st.caption("Catatan: penalti 'menyeberang jalan raya besar yang ramai' belum bisa diimplementasikan karena data koordinat & waktu tempuh OSRM tidak memuat info klasifikasi jalan (mana jalan arteri vs jalan kecil).")
 
         if st.button("Jalankan Optimasi"):
             with st.spinner('Menghitung Rute Realistis...'):
@@ -506,79 +680,33 @@ if df is not None:
                 names = ["Kantor Area Bogor"] + [x[name_col] for x in data_combined]
                 codes = ["-"] + [(x[kode_col] if has_kode_b else "-") for x in data_combined]
 
-                if algo_mode_b.startswith("Greedy"):
-                    # ====================================================
-                    # KODE ASLI - GREEDY NEAREST NEIGHBOR (TIDAK DIUBAH)
-                    # ====================================================
-                    coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
-                    url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
-                    data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
-                    matrix = data['durations']
-                    
-                    route_indices, total_seconds = [0], 0
-                    unvisited = list(range(1, len(locations)))
-                    while unvisited:
-                        curr = route_indices[-1]
-                        best = min(unvisited, key=lambda x: matrix[curr][x])
-                        total_seconds += matrix[curr][best]
-                        route_indices.append(best)
-                        unvisited.remove(best)
-                    route_indices.append(0)
-                    
-                    table_data = []
-                    for i in range(len(route_indices) - 1):
-                        curr, next_n = route_indices[i], route_indices[i+1]
-                        table_data.append({
-                            "Checklist": False, "Kode Customer": codes[next_n], "No": i + 1, "Dari": names[curr], "Ke": names[next_n],
-                            "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2),
-                            "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
-                            "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
-                        })
-                    df_mode_b = pd.DataFrame(table_data)
-                elif algo_mode_b.startswith("Clustering"):
-                    # ====================================================
-                    # KODE - CLUSTERING WILAYAH DULU, BARU GREEDY PER KLASTER (TIDAK DIUBAH)
-                    # ====================================================
-                    raw_locations_b = locations[1:]
-                    n_cluster_b = int(n_cluster_input_b) if n_cluster_input_b else max(1, round(len(raw_locations_b) / 10))
-                    visit_order_b, leg_seconds_b = solve_route_with_clustering(raw_locations_b, depot_lat, depot_lon, n_clusters=n_cluster_b)
+                # ====================================================
+                # METODE: ANGULAR SWEEP + BRANCH-AND-RETURN + 2-OPT
+                # ====================================================
+                coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
+                url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
+                data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
+                matrix = data['durations']
 
-                    route_indices = [0] + [idx + 1 for idx in visit_order_b] + [0]
-                    total_seconds = sum(leg_seconds_b)
+                raw_locations_b = locations[1:]
+                route_indices = solve_route_angular_branch_2opt(
+                    raw_locations_b, matrix, locations, depot_lat, depot_lon,
+                    branch_threshold_km=branch_threshold_m / 1000,
+                    turn_penalty_max=turn_penalty_input * 60
+                )
+                total_seconds = sum(matrix[route_indices[i]][route_indices[i+1]] for i in range(len(route_indices) - 1))
 
-                    table_data = []
-                    for i in range(len(route_indices) - 1):
-                        curr, next_n = route_indices[i], route_indices[i+1]
-                        table_data.append({
-                            "Checklist": False, "Kode Customer": codes[next_n], "No": i + 1, "Dari": names[curr], "Ke": names[next_n],
-                            "Waktu (Menit)": round(leg_seconds_b[i] / 60, 2),
-                            "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
-                            "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
-                        })
-                    df_mode_b = pd.DataFrame(table_data)
-                else:
-                    # ====================================================
-                    # FITUR BARU - METODE INTEGRASI CLARKE-WRIGHT DAN INSERTION HEURISTIC
-                    # ====================================================
-                    coords = ";".join([f"{loc[1]},{loc[0]}" for loc in locations])
-                    url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration,distance"
-                    data = requests.get(url, headers={'User-Agent': 'Sales/1.0'}).json()
-                    matrix = data['durations']
+                table_data = []
+                for i in range(len(route_indices) - 1):
+                    curr, next_n = route_indices[i], route_indices[i+1]
+                    table_data.append({
+                        "Checklist": False, "Kode Customer": codes[next_n], "No": i + 1, "Dari": names[curr], "Ke": names[next_n],
+                        "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2),
+                        "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
+                        "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
+                    })
+                df_mode_b = pd.DataFrame(table_data)
 
-                    visit_order_cw = solve_route_clarke_wright_insertion(len(locations), matrix, depot=0)
-                    route_indices = [0] + visit_order_cw + [0]
-                    total_seconds = sum(matrix[route_indices[i]][route_indices[i+1]] for i in range(len(route_indices) - 1))
-
-                    table_data = []
-                    for i in range(len(route_indices) - 1):
-                        curr, next_n = route_indices[i], route_indices[i+1]
-                        table_data.append({
-                            "Checklist": False, "Kode Customer": codes[next_n], "No": i + 1, "Dari": names[curr], "Ke": names[next_n],
-                            "Waktu (Menit)": round(matrix[curr][next_n] / 60, 2),
-                            "Navigasi A->B": get_single_leg_link(locations[curr][0], locations[curr][1], locations[next_n][0], locations[next_n][1]),
-                            "Rute 10 toko kedepan": get_batch_gmaps_link([locations[route_indices[idx]] for idx in range(i, min(i+10, len(route_indices)))])
-                        })
-                    df_mode_b = pd.DataFrame(table_data)
                 st.data_editor(df_mode_b, column_config={"Navigasi A->B": st.column_config.LinkColumn("Navigasi", display_text="🗺️ Cek Rute"), "Rute 10 toko kedepan": st.column_config.LinkColumn("Batch", display_text="🚀 Lihat Rute")}, width='stretch', hide_index=True)
                 st.metric("Total Waktu", f"{int(total_seconds//3600)} Jam {int((total_seconds%3600)//60)} Menit")
                 
